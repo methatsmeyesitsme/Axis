@@ -97,6 +97,10 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
               if (data.content) {
                 setStreamingContent(prev => prev + data.content);
               }
+              if (data.error) {
+                setStreamingContent(prev => prev || `Error: ${data.error}`);
+                done = true;
+              }
               if (data.titleUpdate) {
                 queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations", targetId] });

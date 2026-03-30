@@ -148,7 +148,7 @@ Always explain what the code does after providing it.`;
 
   try {
     const stream = await openai.chat.completions.create({
-      model: "gpt-5.3-codex",
+      model: "gpt-5.2",
       max_completion_tokens: 8192,
       messages: chatMessages,
       stream: true,
