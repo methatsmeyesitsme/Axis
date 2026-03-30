@@ -2,8 +2,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 
 const LANGUAGES = [
-  "JavaScript", "TypeScript", "Python", "Java", "C++", "C#", "Go", "Rust", 
-  "PHP", "Ruby", "Swift", "Kotlin", "Dart", "SQL", "HTML/CSS", "Shell/Bash", "R", "MATLAB"
+  "JavaScript", "TypeScript", "Python", "Java", "C++", "C#", "Go", "Rust",
+  "PHP", "Ruby", "Swift", "Kotlin", "Dart", "Lua", "Luau", "SQL", "HTML/CSS", "Shell/Bash", "R", "MATLAB"
 ];
 
 interface LanguageSelectorProps {
