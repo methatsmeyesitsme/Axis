@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "CodeGen AI"
+version = "1.0.0"
+id = "artifacts/codegen"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21670
+
+[services.development]
+run = "pnpm --filter @workspace/codegen run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/codegen", "run", "build" ]
+publicDir = "artifacts/codegen/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21670"
+BASE_PATH = "/"
