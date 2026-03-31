@@ -383,7 +383,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             </div>
           </div>
         </div>
-        {inputBar("Ask CodeGen to write some code...")}
+        {inputBar(user ? `Ready to code, ${user.username}?` : "Ask CodeGen to write some code...")}
       </div>
     );
   }
@@ -421,7 +421,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         </div>
       </div>
 
-      {inputBar("Ask a follow-up question or paste some code...")}
+      {inputBar(user ? `Ready to code, ${user.username}?` : "Ask a follow-up question or paste some code...")}
     </div>
   );
 }
