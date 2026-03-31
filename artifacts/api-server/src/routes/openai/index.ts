@@ -125,11 +125,34 @@ router.post("/conversations/:id/messages", async (req, res) => {
     content: body.content,
   });
 
-  const systemPrompt = `You are CodeGen, an expert AI programming assistant specializing in ${conv.language}. 
-When asked to write code, always provide clean, well-commented, production-ready ${conv.language} code.
-Format code inside markdown code blocks with the appropriate language tag.
-If the user's request is unclear, ask clarifying questions before writing code.
-Always explain what the code does after providing it.`;
+  const systemPrompt = `You are CodeGen, an expert AI programming assistant specializing in ${conv.language}.
+
+CORE BEHAVIOR:
+1. When a user shares or pastes code WITHOUT a specific request, always:
+   - First briefly describe what the code does overall
+   - Then walk through the key parts in plain, beginner-friendly language
+   - Use simple analogies when helpful
+   - Do NOT assume they know advanced terms
+
+2. When a user asks to FIX or DEBUG code, always follow this exact order:
+   - Step 1: Identify the bug(s) and state them clearly
+   - Step 2: Briefly explain WHY it's a bug in simple terms
+   - Step 3: Provide the corrected code
+   - Never jump straight to a fix without explaining the problem
+
+3. When GENERATING new code:
+   - Write clean, well-commented ${conv.language} code
+   - Include a brief explanation of how it works after the code block
+   - Use simple language, suitable for beginners
+
+4. Always format code inside markdown code blocks with the language tag, e.g.:
+   \`\`\`${conv.language.toLowerCase().replace(/[^a-z0-9]/g, "")}
+   // code here
+   \`\`\`
+
+5. Keep explanations clear and beginner-friendly. Never be condescending, but do explain things thoroughly.
+
+6. If the user's message contains a note like "[POSSIBLE SYNTAX ISSUES DETECTED]", acknowledge those specific issues in your response.`;
 
   const chatMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: systemPrompt },
@@ -155,6 +178,7 @@ Always explain what the code does after providing it.`;
     });
 
     for await (const chunk of stream) {
+      if (res.writableEnded) break;
       const content = chunk.choices[0]?.delta?.content;
       if (content) {
         fullResponse += content;
@@ -162,40 +186,48 @@ Always explain what the code does after providing it.`;
       }
     }
 
-    await db.insert(messages).values({
-      conversationId: id,
-      role: "assistant",
-      content: fullResponse,
-    });
-
-    const isFirstMessage = history.length === 0;
-    if (isFirstMessage && conv.title === "New Chat") {
-      const titleStream = await openai.chat.completions.create({
-        model: "gpt-5-nano",
-        max_completion_tokens: 20,
-        messages: [
-          {
-            role: "user",
-            content: `Generate a very short title (3-5 words max) for a coding chat that started with this message: "${body.content}". Reply with ONLY the title, no quotes, no punctuation at the end.`,
-          },
-        ],
-        stream: false,
+    if (!res.writableEnded) {
+      await db.insert(messages).values({
+        conversationId: id,
+        role: "assistant",
+        content: fullResponse,
       });
-      const newTitle = titleStream.choices[0]?.message?.content?.trim() ?? conv.title;
-      if (newTitle && newTitle !== conv.title) {
-        await db
-          .update(conversations)
-          .set({ title: newTitle })
-          .where(eq(conversations.id, id));
-        res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
-      }
-    }
 
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-    res.end();
+      const isFirstMessage = history.length === 0;
+      if (isFirstMessage) {
+        try {
+          const titleResponse = await openai.chat.completions.create({
+            model: "gpt-5-nano",
+            max_completion_tokens: 15,
+            messages: [
+              {
+                role: "user",
+                content: `Create a short title (3-5 words max) summarizing this coding request: "${body.content.slice(0, 200)}". Reply with ONLY the title, no quotes, no punctuation at end, no markdown.`,
+              },
+            ],
+            stream: false,
+          });
+          const newTitle = titleResponse.choices[0]?.message?.content?.trim();
+          if (newTitle && newTitle.length > 0) {
+            await db
+              .update(conversations)
+              .set({ title: newTitle })
+              .where(eq(conversations.id, id));
+            res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
+          }
+        } catch {
+          // title generation failure is non-fatal
+        }
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    }
   } catch (err) {
-    res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
-    res.end();
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
+      res.end();
+    }
   }
 });
 

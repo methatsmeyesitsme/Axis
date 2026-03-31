@@ -1,20 +1,102 @@
-import { useState, useRef, useEffect } from "react";
-import { 
-  useGetOpenaiConversation, 
+import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  useGetOpenaiConversation,
   useCreateOpenaiConversation,
-  useListOpenaiMessages
+  useListOpenaiMessages,
+  getListOpenaiConversationsQueryKey,
+  getGetOpenaiConversationQueryKey,
+  getListOpenaiMessagesQueryKey,
 } from "@workspace/api-client-react";
-import type { OpenaiMessage } from "@workspace/api-client-react/src/generated/api.schemas";
 import LanguageSelector from "./LanguageSelector";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Code2, Loader2 } from "lucide-react";
+import { Send, Code2, Square, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface ChatAreaProps {
   conversationId: number | null;
   onConversationCreated: (id: number) => void;
+}
+
+function looksLikeCode(text: string): boolean {
+  const codePatterns = [
+    /^\s*(function|def|class|import|from|const|let|var|if|for|while|return)\b/m,
+    /[{};]\s*\n/,
+    /^\s{2,}[\w(]/m,
+    /\bprint\(|console\.log\(|System\.out|printf\(/,
+    /=>\s*\{|=>\s*\w+/,
+    /```[\s\S]*```/,
+  ];
+  const lines = text.split("\n");
+  return lines.length > 3 && codePatterns.some((p) => p.test(text));
+}
+
+function checkSyntaxIssues(text: string): string[] {
+  const issues: string[] = [];
+
+  if (!text.trim()) {
+    issues.push("Empty input");
+    return issues;
+  }
+
+  // Only check bracket balance if it looks like code
+  if (looksLikeCode(text)) {
+    const pairs: Record<string, string> = { ")": "(", "}": "{", "]": "[" };
+    const stack: string[] = [];
+    let inString = false;
+    let stringChar = "";
+
+    for (const ch of text) {
+      if (inString) {
+        if (ch === stringChar) inString = false;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        inString = true;
+        stringChar = ch;
+        continue;
+      }
+      if ("({[".includes(ch)) stack.push(ch);
+      else if (")}]".includes(ch)) {
+        if (stack[stack.length - 1] !== pairs[ch]) {
+          issues.push("Mismatched or missing brackets");
+          break;
+        }
+        stack.pop();
+      }
+    }
+    if (stack.length > 0 && !issues.includes("Mismatched or missing brackets")) {
+      issues.push("Unclosed brackets detected");
+    }
+  }
+
+  return issues;
+}
+
+function buildSmartPrompt(userInput: string): { prompt: string; warning: string | null } {
+  const input = userInput.trim();
+  const isCode = looksLikeCode(input);
+  const issues = checkSyntaxIssues(input);
+
+  const hasFixKeyword = /\b(fix|debug|error|bug|broken|wrong|issue|problem|not working)\b/i.test(input);
+  const isJustCode = isCode && input.split("\n").length > 4 && !input.toLowerCase().includes("fix") && !input.includes("?");
+
+  let prompt = input;
+  let warning: string | null = null;
+
+  if (issues.length > 0 && isCode) {
+    warning = `Heads up: ${issues.join(", ")} found in your code. Sending it anyway with a note for the AI.`;
+    prompt = `${input}\n\n[POSSIBLE SYNTAX ISSUES DETECTED: ${issues.join(", ")}]`;
+  }
+
+  if (isJustCode && !hasFixKeyword) {
+    prompt = `${prompt}\n\n[Please explain what this code does in beginner-friendly terms, then break down the key parts.]`;
+  } else if (hasFixKeyword && isCode) {
+    prompt = `${prompt}\n\n[Smart debug mode: Find the bug, explain why it's a problem in simple terms, then show the fixed code.]`;
+  }
+
+  return { prompt, warning };
 }
 
 export default function ChatArea({ conversationId, onConversationCreated }: ChatAreaProps) {
@@ -23,196 +105,255 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const { data: conversation, isLoading: isLoadingConv } = useGetOpenaiConversation(
-    conversationId!, 
-    { query: { enabled: !!conversationId, queryKey: ["/api/openai/conversations", conversationId] } }
-  );
+  const { data: conversation } = useGetOpenaiConversation(conversationId!, {
+    query: {
+      enabled: !!conversationId,
+      queryKey: getGetOpenaiConversationQueryKey(conversationId!),
+    },
+  });
 
-  const { data: serverMessages = [] } = useListOpenaiMessages(
-    conversationId!,
-    { query: { enabled: !!conversationId, queryKey: ["/api/openai/conversations", conversationId, "messages"] } }
-  );
+  const { data: serverMessages = [] } = useListOpenaiMessages(conversationId!, {
+    query: {
+      enabled: !!conversationId,
+      queryKey: getListOpenaiMessagesQueryKey(conversationId!),
+    },
+  });
 
   const createMutation = useCreateOpenaiConversation();
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [serverMessages, streamingContent]);
+  }, [serverMessages, streamingContent, scrollToBottom]);
+
+  const handleCancel = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setIsStreaming(false);
+    setIsThinking(false);
+    setStreamingContent("");
+    queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(conversationId!) });
+  };
 
   const handleSend = async () => {
-    if (!input.trim() || isStreaming) return;
-    
+    if (isStreaming) {
+      handleCancel();
+      return;
+    }
+
+    if (!input.trim()) return;
+
+    const { prompt, warning: syntaxWarning } = buildSmartPrompt(input);
+    setWarning(syntaxWarning);
+
     let targetId = conversationId;
-    const userMessageContent = input.trim();
     setInput("");
 
     if (!targetId) {
       const newConv = await createMutation.mutateAsync({
-        data: { title: "New Chat", language: selectedLanguage }
+        data: { title: "New Chat", language: selectedLanguage },
       });
       targetId = newConv.id;
       onConversationCreated(targetId);
-      queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations"] });
+      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
 
-    setIsStreaming(true);
+    setIsThinking(true);
+    setIsStreaming(false);
     setStreamingContent("");
 
-    // Optimistically add user message if we want, but server might take a moment.
-    // We will just let the stream start.
-    
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const response = await fetch(`/api/openai/conversations/${targetId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: userMessageContent }),
+        body: JSON.stringify({ content: prompt }),
+        signal: controller.signal,
       });
 
-      if (!response.ok) throw new Error("Network response was not ok");
-      if (!response.body) throw new Error("No body in response");
+      if (!response.ok) throw new Error("Network error");
+      if (!response.body) throw new Error("No response body");
+
+      setIsThinking(false);
+      setIsStreaming(true);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
       let done = false;
-      
+
       while (!done) {
         const { value, done: readerDone } = await reader.read();
-        done = readerDone;
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n").filter(l => l.trim().startsWith("data: "));
-          
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line.replace(/^data: /, ""));
-              
-              if (data.content) {
-                setStreamingContent(prev => prev + data.content);
-              }
-              if (data.error) {
-                setStreamingContent(prev => prev || `Error: ${data.error}`);
-                done = true;
-              }
-              if (data.titleUpdate) {
-                queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations"] });
-                queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations", targetId] });
-              }
-              if (data.done) {
-                done = true;
-              }
-            } catch (e) {
-              console.error("Error parsing stream chunk", e);
+        if (readerDone) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+
+            if (data.content) {
+              setStreamingContent((prev) => prev + data.content);
             }
+            if (data.error) {
+              setStreamingContent((prev) => prev || `Sorry, something went wrong: ${data.error}`);
+              done = true;
+            }
+            if (data.titleUpdate) {
+              queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+            }
+            if (data.done) {
+              done = true;
+            }
+          } catch {
+            // ignore parse errors for partial chunks
           }
         }
       }
-    } catch (error) {
-      console.error("Stream failed:", error);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== "AbortError") {
+        setStreamingContent("Connection error. Please try again.");
+      }
+      setIsThinking(false);
     } finally {
+      abortRef.current = null;
       setIsStreaming(false);
+      setIsThinking(false);
       setStreamingContent("");
-      queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations", targetId, "messages"] });
+      queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(targetId!) });
+      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  if (!conversationId && !isLoadingConv) {
+  const inputBar = (placeholder: string) => (
+    <div className="p-4 border-t bg-background shadow-sm shrink-0">
+      {warning && (
+        <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{warning}</span>
+        </div>
+      )}
+      <div className="max-w-4xl mx-auto flex gap-3">
+        <Textarea
+          ref={inputRef}
+          placeholder={placeholder}
+          className="resize-none min-h-[60px] max-h-[200px] shadow-sm border-input rounded-xl"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            if (warning) setWarning(null);
+          }}
+          onKeyDown={handleKeyDown}
+          disabled={isThinking}
+        />
+        <Button
+          className={`h-[60px] w-[60px] rounded-xl shrink-0 transition-colors ${
+            isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"
+          }`}
+          onClick={handleSend}
+          disabled={isThinking || (!input.trim() && !isStreaming)}
+        >
+          {isThinking ? (
+            <div className="flex gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-bounce [animation-delay:0ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-bounce [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-bounce [animation-delay:300ms]" />
+            </div>
+          ) : isStreaming ? (
+            <Square className="w-5 h-5 fill-white" />
+          ) : (
+            <Send className="w-5 h-5" />
+          )}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground text-center mt-2">
+        {isStreaming ? "Click the stop button to cancel" : "Enter to send · Shift+Enter for new line"}
+      </p>
+    </div>
+  );
+
+  if (!conversationId) {
     return (
-      <div className="flex-1 flex flex-col h-full bg-background relative">
+      <div className="flex-1 flex flex-col h-full bg-background">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="max-w-md w-full text-center space-y-6">
-            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
               <Code2 className="w-8 h-8 text-primary" />
             </div>
             <h1 className="text-3xl font-bold text-foreground">Welcome to CodeGen</h1>
             <p className="text-muted-foreground text-lg">
               Your intelligent programming partner. Select a language to get started.
             </p>
-            <div className="pt-8 max-w-xs mx-auto">
-              <LanguageSelector 
-                value={selectedLanguage} 
-                onChange={setSelectedLanguage} 
-              />
+            <div className="pt-4 max-w-xs mx-auto">
+              <LanguageSelector value={selectedLanguage} onChange={setSelectedLanguage} />
             </div>
           </div>
         </div>
-        <div className="p-4 border-t bg-background">
-          <div className="max-w-4xl mx-auto flex gap-4">
-            <Textarea
-              placeholder="Ask CodeGen to write some code..."
-              className="resize-none min-h-[60px] max-h-[200px] shadow-sm border-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-            />
-            <Button 
-              className="h-[60px] w-[60px] rounded-xl shrink-0" 
-              onClick={handleSend}
-              disabled={!input.trim() || isStreaming}
-            >
-              <Send className="w-5 h-5" />
-            </Button>
-          </div>
-        </div>
+        {inputBar("Ask CodeGen to write some code...")}
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-background relative">
+    <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
       <div className="h-14 border-b flex items-center justify-between px-6 bg-card shrink-0">
         <div className="flex flex-col">
-          <span className="font-semibold text-sm">{conversation?.title || "Loading..."}</span>
-          <span className="text-xs text-muted-foreground">{conversation?.language || selectedLanguage}</span>
+          <span className="font-semibold text-sm">{conversation?.title ?? "Loading..."}</span>
+          <span className="text-xs text-muted-foreground">{conversation?.language ?? selectedLanguage}</span>
         </div>
       </div>
 
-      <div 
+      <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-6 scroll-smooth bg-gray-50/30"
+        className="flex-1 overflow-y-auto p-6 scroll-smooth"
+        style={{ scrollBehavior: "smooth" }}
       >
-        <div className="max-w-4xl mx-auto space-y-6 pb-6">
+        <div className="max-w-4xl mx-auto space-y-6 pb-4">
           {serverMessages.map((msg) => (
-            <MessageBubble key={msg.id} role={msg.role as 'user' | 'assistant'} content={msg.content} />
+            <MessageBubble
+              key={msg.id}
+              role={msg.role as "user" | "assistant"}
+              content={msg.content}
+            />
           ))}
-          {isStreaming && (
-            <MessageBubble role="assistant" content={streamingContent} isStreaming />
+          {(isThinking || isStreaming) && (
+            <MessageBubble
+              role="assistant"
+              content={streamingContent}
+              isStreaming={isStreaming}
+              isThinking={isThinking}
+            />
           )}
         </div>
       </div>
 
-      <div className="p-4 border-t bg-background shadow-sm">
-        <div className="max-w-4xl mx-auto flex gap-4">
-          <Textarea
-            placeholder="Ask a follow-up question..."
-            className="resize-none min-h-[60px] max-h-[200px] shadow-sm border-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <Button 
-            className="h-[60px] w-[60px] rounded-xl shrink-0 bg-primary hover:bg-primary/90" 
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-          >
-            {isStreaming ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-          </Button>
-        </div>
-      </div>
+      {inputBar("Ask a follow-up question or paste some code...")}
     </div>
   );
 }
