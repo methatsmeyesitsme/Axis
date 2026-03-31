@@ -4,16 +4,17 @@ import {
   useDeleteOpenaiConversation 
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { Plus, MessageSquare, Trash2, Code2 } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Code2, Settings } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface SidebarProps {
   activeConversationId: number | null;
   onSelectConversation: (id: number | null) => void;
+  onOpenSettings: () => void;
 }
 
-export default function Sidebar({ activeConversationId, onSelectConversation }: SidebarProps) {
+export default function Sidebar({ activeConversationId, onSelectConversation, onOpenSettings }: SidebarProps) {
   const queryClient = useQueryClient();
   const { data: conversations = [], isLoading } = useListOpenaiConversations();
   const deleteMutation = useDeleteOpenaiConversation();
@@ -89,6 +90,19 @@ export default function Sidebar({ activeConversationId, onSelectConversation }: 
           )}
         </div>
       </ScrollArea>
+
+      <div className="shrink-0">
+        <div className="mx-3 border-t" />
+        <div className="p-3">
+          <button
+            onClick={onOpenSettings}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            <Settings className="w-4 h-4 shrink-0" />
+            Settings
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

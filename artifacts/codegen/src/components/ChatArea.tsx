@@ -11,12 +11,14 @@ import LanguageSelector from "./LanguageSelector";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Code2, Square, AlertTriangle } from "lucide-react";
+import { Send, Code2, Square, AlertTriangle, LogIn } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
 
 interface ChatAreaProps {
   conversationId: number | null;
   onConversationCreated: (id: number) => void;
+  onOpenAuth: () => void;
 }
 
 function looksLikeCode(text: string): boolean {
@@ -99,7 +101,8 @@ function buildSmartPrompt(userInput: string): { prompt: string; warning: string 
   return { prompt, warning };
 }
 
-export default function ChatArea({ conversationId, onConversationCreated }: ChatAreaProps) {
+export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth }: ChatAreaProps) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
   const [input, setInput] = useState("");
@@ -307,6 +310,17 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
 
   const inputBar = (placeholder: string) => (
     <div className="p-4 border-t bg-background shadow-sm shrink-0">
+      {!user && (
+        <div className="max-w-4xl mx-auto mb-2">
+          <button
+            onClick={onOpenAuth}
+            className="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors py-1.5"
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            Log in to save your chats
+          </button>
+        </div>
+      )}
       {warning && (
         <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />

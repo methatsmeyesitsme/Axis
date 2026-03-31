@@ -5,14 +5,20 @@ import {
   SendOpenaiMessageBody,
 } from "@workspace/api-zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, isNull } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-router.get("/conversations", async (_req, res) => {
+router.get("/conversations", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    res.json([]);
+    return;
+  }
   const result = await db
     .select()
     .from(conversations)
+    .where(eq(conversations.userId, userId))
     .orderBy(desc(conversations.createdAt));
   res.json(
     result.map((c) => ({
@@ -26,9 +32,10 @@ router.get("/conversations", async (_req, res) => {
 
 router.post("/conversations", async (req, res) => {
   const body = CreateOpenaiConversationBody.parse(req.body);
+  const userId = req.session?.userId ?? null;
   const [created] = await db
     .insert(conversations)
-    .values({ title: body.title, language: body.language })
+    .values({ title: body.title, language: body.language, userId })
     .returning();
   res.status(201).json({
     id: created.id,
