@@ -166,6 +166,8 @@ CORE BEHAVIOR:
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
 
   let fullResponse = "";
 
@@ -195,28 +197,45 @@ CORE BEHAVIOR:
 
       const isFirstMessage = history.length === 0;
       if (isFirstMessage) {
+        let newTitle: string | null = null;
+
+        // Try AI title generation first
         try {
           const titleResponse = await openai.chat.completions.create({
-            model: "gpt-5-nano",
+            model: "gpt-5.2",
             max_completion_tokens: 15,
             messages: [
               {
                 role: "user",
-                content: `Create a short title (3-5 words max) summarizing this coding request: "${body.content.slice(0, 200)}". Reply with ONLY the title, no quotes, no punctuation at end, no markdown.`,
+                content: `Create a short title (3-5 words max) summarizing this coding request: "${body.content.slice(0, 300)}". Reply with ONLY the title, no quotes, no punctuation at end, no markdown.`,
               },
             ],
             stream: false,
           });
-          const newTitle = titleResponse.choices[0]?.message?.content?.trim();
-          if (newTitle && newTitle.length > 0) {
-            await db
-              .update(conversations)
-              .set({ title: newTitle })
-              .where(eq(conversations.id, id));
-            res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
+          const candidate = titleResponse.choices[0]?.message?.content?.trim();
+          if (candidate && candidate.length > 0 && candidate.length < 80) {
+            newTitle = candidate;
           }
         } catch {
-          // title generation failure is non-fatal
+          // fall through to text extraction
+        }
+
+        // Fallback: extract meaningful words from the first message
+        if (!newTitle) {
+          const cleaned = body.content
+            .replace(/```[\s\S]*?```/g, "")
+            .replace(/[`*_#]/g, "")
+            .trim();
+          const words = cleaned.split(/\s+/).slice(0, 6).join(" ");
+          newTitle = words.length > 0 ? words : "Untitled Chat";
+        }
+
+        if (newTitle) {
+          await db
+            .update(conversations)
+            .set({ title: newTitle })
+            .where(eq(conversations.id, id));
+          res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
         }
       }
 

@@ -104,12 +104,17 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const charQueueRef = useRef<string>("");
+  const displayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamingContentRef = useRef<string>("");
 
   const { data: conversation } = useGetOpenaiConversation(conversationId!, {
     query: {
@@ -135,16 +140,54 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
 
   useEffect(() => {
     scrollToBottom();
-  }, [serverMessages, streamingContent, scrollToBottom]);
+  }, [serverMessages, displayedContent, scrollToBottom]);
+
+  // Typewriter effect: drain charQueue into displayedContent at ~120 chars/sec
+  useEffect(() => {
+    if (isStreaming) {
+      displayTimerRef.current = setInterval(() => {
+        if (charQueueRef.current.length > 0) {
+          const batch = charQueueRef.current.slice(0, 6);
+          charQueueRef.current = charQueueRef.current.slice(6);
+          setDisplayedContent((prev) => prev + batch);
+        }
+      }, 25);
+    } else {
+      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
+      charQueueRef.current = "";
+    }
+    return () => {
+      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
+    };
+  }, [isStreaming]);
+
+  // Feed new streaming tokens into the char queue
+  useEffect(() => {
+    charQueueRef.current += streamingContent.slice(displayedContent.length + charQueueRef.current.length);
+  }, [streamingContent, displayedContent]);
+
+  // Apply pending title update to sidebar
+  useEffect(() => {
+    if (pendingTitle) {
+      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+      if (conversationId) {
+        queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(conversationId) });
+      }
+      setPendingTitle(null);
+    }
+  }, [pendingTitle, conversationId, queryClient]);
 
   const handleCancel = () => {
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
     }
+    if (displayTimerRef.current) clearInterval(displayTimerRef.current);
+    charQueueRef.current = "";
     setIsStreaming(false);
     setIsThinking(false);
     setStreamingContent("");
+    setDisplayedContent("");
     queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(conversationId!) });
   };
 
@@ -174,6 +217,8 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
     setIsThinking(true);
     setIsStreaming(false);
     setStreamingContent("");
+    setDisplayedContent("");
+    charQueueRef.current = "";
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -212,14 +257,15 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
             const data = JSON.parse(trimmed.slice(6));
 
             if (data.content) {
-              setStreamingContent((prev) => prev + data.content);
+              streamingContentRef.current += data.content as string;
+              setStreamingContent(streamingContentRef.current);
             }
             if (data.error) {
               setStreamingContent((prev) => prev || `Sorry, something went wrong: ${data.error}`);
               done = true;
             }
             if (data.titleUpdate) {
-              queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+              setPendingTitle(data.titleUpdate as string);
             }
             if (data.done) {
               done = true;
@@ -236,11 +282,19 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
       setIsThinking(false);
     } finally {
       abortRef.current = null;
+      // Flush any remaining queued characters immediately
+      const finalContent = streamingContentRef.current;
+      streamingContentRef.current = "";
+      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
+      charQueueRef.current = "";
+      setDisplayedContent(finalContent);
       setIsStreaming(false);
       setIsThinking(false);
       setStreamingContent("");
       queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(targetId!) });
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+      // Clear displayed content after the server messages render
+      setTimeout(() => setDisplayedContent(""), 50);
     }
   };
 
@@ -345,7 +399,7 @@ export default function ChatArea({ conversationId, onConversationCreated }: Chat
           {(isThinking || isStreaming) && (
             <MessageBubble
               role="assistant"
-              content={streamingContent}
+              content={displayedContent}
               isStreaming={isStreaming}
               isThinking={isThinking}
             />
