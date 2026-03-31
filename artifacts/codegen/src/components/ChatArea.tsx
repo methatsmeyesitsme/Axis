@@ -369,21 +369,27 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   if (!conversationId) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background">
-        <div className="flex-1 flex items-center justify-center p-8">
-          <div className="max-w-md w-full text-center space-y-6">
-            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
-              <Code2 className="w-8 h-8 text-primary" />
-            </div>
-            <h1 className="text-3xl font-bold text-foreground">Welcome to CodeGen</h1>
-            <p className="text-muted-foreground text-lg">
-              Your intelligent programming partner. Select a language to get started.
-            </p>
-            <div className="pt-4 max-w-xs mx-auto">
-              <LanguageSelector value={selectedLanguage} onChange={setSelectedLanguage} />
-            </div>
+        <div className="text-center px-8 pt-10 pb-0">
+          <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Code2 className="w-7 h-7 text-primary" />
           </div>
+          <h1 className="text-3xl font-bold text-foreground">Welcome to CodeGen</h1>
+          <p className="text-muted-foreground text-base mt-2">
+            Your intelligent programming partner. Select a language to get started.
+          </p>
         </div>
-        {inputBar(user ? `Ready to code, ${user.username}?` : "Ask CodeGen to write some code...")}
+
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-2xl font-semibold text-foreground">
+            {user ? `Ready to code, ${user.username}?` : "Ready to code?"}
+          </p>
+        </div>
+
+        <div className="px-8 pb-3 max-w-xs mx-auto w-full">
+          <LanguageSelector value={selectedLanguage} onChange={setSelectedLanguage} />
+        </div>
+
+        {inputBar("Have CodeGen write code or explain code.")}
       </div>
     );
   }

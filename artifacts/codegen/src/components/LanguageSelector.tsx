@@ -18,7 +18,7 @@ export default function LanguageSelector({ value, onChange }: LanguageSelectorPr
         Programming Language
       </Label>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id="language-select" className="w-full h-12 bg-white border-input shadow-sm rounded-xl">
+        <SelectTrigger id="language-select" className="w-full h-12 bg-white dark:bg-white border-input shadow-sm rounded-xl text-foreground dark:text-[hsl(222,47%,9%)] dark:[&_svg]:text-[hsl(222,47%,9%)]">
           <SelectValue placeholder="Select a language" />
         </SelectTrigger>
         <SelectContent className="max-h-[300px]">
