@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Sparkles, Square, LogIn, Plus, Paperclip, X } from "lucide-react";
+import { Send, Sparkles, Square, LogIn, Plus, Paperclip, X, ChevronDown } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 interface CortexAreaProps {
@@ -27,6 +27,7 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -37,11 +38,28 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
   const streamDoneRef = useRef(false);
   const pendingMessageRef = useRef<string>("");
 
-  const scrollToBottom = useCallback(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  const isNearBottom = useCallback(() => {
+    if (!scrollRef.current) return true;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    return scrollHeight - scrollTop - clientHeight < 120;
   }, []);
 
-  useEffect(() => { scrollToBottom(); }, [messages, displayedContent, scrollToBottom]);
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      setShowScrollButton(false);
+    }
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    setShowScrollButton(scrollHeight - scrollTop - clientHeight > 120);
+  }, []);
+
+  useEffect(() => {
+    if (isNearBottom()) scrollToBottom();
+  }, [messages, displayedContent, scrollToBottom, isNearBottom]);
 
   // Typewriter interval — drains queue, finalizes when done
   useEffect(() => {
@@ -302,15 +320,26 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
-        <div className="max-w-4xl mx-auto space-y-6 pb-4">
-          {messages.map((msg, i) => (
-            <MessageBubble key={i} role={msg.role} content={msg.content} />
-          ))}
-          {(isThinking || isStreaming) && (
-            <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} />
-          )}
+      <div className="flex-1 relative overflow-hidden">
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
+          <div className="max-w-4xl mx-auto space-y-6 pb-4">
+            {messages.map((msg, i) => (
+              <MessageBubble key={i} role={msg.role} content={msg.content} />
+            ))}
+            {(isThinking || isStreaming) && (
+              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} />
+            )}
+          </div>
         </div>
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:bg-primary/90 transition-all animate-in fade-in slide-in-from-bottom-2 duration-200"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+            Scroll to latest
+          </button>
+        )}
       </div>
 
       {inputBar("Ask Cortex anything...")}
