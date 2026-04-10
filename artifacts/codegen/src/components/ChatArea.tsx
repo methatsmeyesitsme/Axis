@@ -87,7 +87,6 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const queryClient = useQueryClient();
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
   const [input, setInput] = useState("");
-  const [streamingContent, setStreamingContent] = useState("");
   const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -95,6 +94,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [planMode, setPlanMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -102,6 +102,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const charQueueRef = useRef<string>("");
   const displayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamingContentRef = useRef<string>("");
+  const streamDoneRef = useRef(false);
+  const finalizeTargetRef = useRef<number | null>(null);
 
   const { data: conversation } = useGetOpenaiConversation(conversationId!, {
     query: { enabled: !!conversationId, queryKey: getGetOpenaiConversationQueryKey(conversationId!) },
@@ -117,25 +119,34 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   useEffect(() => { scrollToBottom(); }, [serverMessages, displayedContent, scrollToBottom]);
 
+  // Typewriter interval — runs while isStreaming, drains charQueue, finalizes when done
   useEffect(() => {
-    if (isStreaming) {
-      displayTimerRef.current = setInterval(() => {
-        if (charQueueRef.current.length > 0) {
-          const batch = charQueueRef.current.slice(0, 6);
-          charQueueRef.current = charQueueRef.current.slice(6);
-          setDisplayedContent((prev) => prev + batch);
-        }
-      }, 25);
-    } else {
-      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
-      charQueueRef.current = "";
-    }
-    return () => { if (displayTimerRef.current) clearInterval(displayTimerRef.current); };
-  }, [isStreaming]);
+    if (!isStreaming) return;
 
-  useEffect(() => {
-    charQueueRef.current += streamingContent.slice(displayedContent.length + charQueueRef.current.length);
-  }, [streamingContent, displayedContent]);
+    displayTimerRef.current = setInterval(() => {
+      if (charQueueRef.current.length > 0) {
+        const batch = charQueueRef.current.slice(0, 5);
+        charQueueRef.current = charQueueRef.current.slice(5);
+        setDisplayedContent((prev) => prev + batch);
+      } else if (streamDoneRef.current) {
+        // Queue drained and network stream is done — finalize
+        clearInterval(displayTimerRef.current!);
+        displayTimerRef.current = null;
+        streamDoneRef.current = false;
+        const tid = finalizeTargetRef.current;
+        setIsStreaming(false);
+        if (tid) {
+          queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
+          queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+        }
+        setTimeout(() => setDisplayedContent(""), 600);
+      }
+    }, 30);
+
+    return () => {
+      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
+    };
+  }, [isStreaming, queryClient]);
 
   useEffect(() => {
     if (pendingTitle) {
@@ -149,9 +160,10 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     if (displayTimerRef.current) clearInterval(displayTimerRef.current);
     charQueueRef.current = "";
+    streamDoneRef.current = false;
+    streamingContentRef.current = "";
     setIsStreaming(false);
     setIsThinking(false);
-    setStreamingContent("");
     setDisplayedContent("");
     queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(conversationId!) });
   };
@@ -160,20 +172,12 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     const files = Array.from(e.target.files ?? []);
     files.forEach((file) => {
       if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setAttachments((prev) => [...prev, { name: file.name, content: `[Image attached: ${file.name}]`, isImage: true }]);
-        };
-        reader.readAsDataURL(file);
+        setAttachments((prev) => [...prev, { name: file.name, content: `[Image attached: ${file.name}]`, isImage: true }]);
       } else {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target?.result as string;
-          setAttachments((prev) => [...prev, {
-            name: file.name,
-            content: `File: ${file.name}\n\`\`\`\n${text}\n\`\`\``,
-            isImage: false,
-          }]);
+          setAttachments((prev) => [...prev, { name: file.name, content: `File: ${file.name}\n\`\`\`\n${text}\n\`\`\``, isImage: false }]);
         };
         reader.readAsText(file);
       }
@@ -205,11 +209,14 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
 
+    // Reset state for new message
+    charQueueRef.current = "";
+    streamingContentRef.current = "";
+    streamDoneRef.current = false;
+    finalizeTargetRef.current = targetId;
+    setDisplayedContent("");
     setIsThinking(true);
     setIsStreaming(false);
-    setStreamingContent("");
-    setDisplayedContent("");
-    charQueueRef.current = "";
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -226,7 +233,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       if (!response.body) throw new Error("No response body");
 
       setIsThinking(false);
-      setIsStreaming(true);
+      setIsStreaming(true); // starts the typewriter interval
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -244,29 +251,40 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           if (!trimmed.startsWith("data: ")) continue;
           try {
             const data = JSON.parse(trimmed.slice(6));
-            if (data.content) { streamingContentRef.current += data.content as string; setStreamingContent(streamingContentRef.current); }
-            if (data.error) { setStreamingContent((prev) => prev || `Sorry, something went wrong: ${data.error}`); done = true; }
+            if (data.content) {
+              streamingContentRef.current += data.content as string;
+              charQueueRef.current += data.content as string; // feed typewriter directly
+            }
+            if (data.error) {
+              charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
+              done = true;
+            }
             if (data.titleUpdate) setPendingTitle(data.titleUpdate as string);
             if (data.done) done = true;
           } catch { /* ignore parse errors */ }
         }
       }
     } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError") setStreamingContent("Connection error. Please try again.");
+      if (err instanceof Error && err.name !== "AbortError") {
+        charQueueRef.current += "Connection error. Please try again.";
+      }
       setIsThinking(false);
     } finally {
       abortRef.current = null;
-      const finalContent = streamingContentRef.current;
       streamingContentRef.current = "";
-      if (displayTimerRef.current) clearInterval(displayTimerRef.current);
-      charQueueRef.current = "";
-      setDisplayedContent(finalContent);
-      setIsStreaming(false);
       setIsThinking(false);
-      setStreamingContent("");
-      queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(targetId!) });
-      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
-      setTimeout(() => setDisplayedContent(""), 50);
+      // Signal typewriter to finalize once queue drains
+      streamDoneRef.current = true;
+      // If nothing queued at all (e.g. abort), stop immediately
+      if (charQueueRef.current.length === 0) {
+        streamDoneRef.current = false;
+        setIsStreaming(false);
+        const tid = finalizeTargetRef.current;
+        if (tid) {
+          queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
+          queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+        }
+      }
     }
   };
 
@@ -297,7 +315,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
               <div key={i} className="flex items-center gap-1.5 bg-muted border border-border rounded-lg px-2.5 py-1 text-xs text-foreground">
                 <Paperclip className="w-3 h-3 text-muted-foreground" />
                 <span className="max-w-[120px] truncate">{att.name}</span>
-                <button onClick={() => removeAttachment(i)} className="text-muted-foreground hover:text-foreground transition-colors ml-0.5">
+                <button onClick={() => removeAttachment(i)} className="text-muted-foreground hover:text-foreground ml-0.5">
                   <X className="w-3 h-3" />
                 </button>
               </div>
@@ -315,7 +333,6 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             onKeyDown={handleKeyDown}
             disabled={isThinking}
           />
-
           <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
             <div className="flex items-center gap-1">
               <input
@@ -326,33 +343,17 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
                 accept="image/*,text/*,.js,.ts,.tsx,.jsx,.py,.java,.cpp,.cs,.go,.rs,.php,.rb,.swift,.kt,.dart,.lua,.sql,.sh,.r,.html,.css,.json,.yaml,.yml,.md,.txt"
                 onChange={handleFileUpload}
               />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
-                onClick={() => fileInputRef.current?.click()}
-                title="Attach file or image"
-                type="button"
-              >
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted" onClick={() => fileInputRef.current?.click()} title="Attach file or image" type="button">
                 <Plus className="w-4 h-4" />
               </Button>
             </div>
-
             <div className="flex items-center gap-2.5">
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
-                <input
-                  type="checkbox"
-                  checked={planMode}
-                  onChange={(e) => setPlanMode(e.target.checked)}
-                  className="rounded border-input w-3.5 h-3.5 accent-primary cursor-pointer"
-                />
+                <input type="checkbox" checked={planMode} onChange={(e) => setPlanMode(e.target.checked)} className="rounded border-input w-3.5 h-3.5 accent-primary cursor-pointer" />
                 Plan
               </label>
-
               <Button
-                className={`h-8 w-8 rounded-lg shrink-0 transition-colors ${
-                  isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"
-                }`}
+                className={`h-8 w-8 rounded-lg shrink-0 transition-colors ${isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
                 onClick={handleSend}
                 disabled={isThinking || (!input.trim() && attachments.length === 0 && !isStreaming)}
                 size="icon"
@@ -372,13 +373,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             </div>
           </div>
         </div>
-
         <p className="text-xs text-muted-foreground text-center mt-2">
-          {planMode
-            ? "Plan mode on — Axis will discuss and outline, not write code"
-            : isStreaming
-            ? "Click the stop button to cancel"
-            : "Enter to send · Shift+Enter for new line"}
+          {planMode ? "Plan mode on — Axis will discuss and outline, not write code" : isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
         </p>
       </div>
     </div>
@@ -396,17 +392,14 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             Your intelligent coding partner. Select a language to get started.
           </p>
         </div>
-
         <div className="flex-1 flex items-center justify-center">
           <p className="text-2xl font-semibold text-foreground">
             {user ? `Ready to code, ${user.username}?` : "Ready to code?"}
           </p>
         </div>
-
         <div className="px-8 pb-3 max-w-xs mx-auto w-full">
           <LanguageSelector value={selectedLanguage} onChange={setSelectedLanguage} />
         </div>
-
         {inputBar("Have Axis write code or explain code.")}
       </div>
     );
@@ -426,7 +419,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         )}
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 scroll-smooth" style={{ scrollBehavior: "smooth" }}>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
         <div className="max-w-4xl mx-auto space-y-6 pb-4">
           {serverMessages.map((msg) => (
             <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
@@ -437,7 +430,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         </div>
       </div>
 
-      {inputBar(user ? `Ask Axis anything...` : "Ask a follow-up question or paste some code...")}
+      {inputBar("Ask Axis anything...")}
     </div>
   );
 }
