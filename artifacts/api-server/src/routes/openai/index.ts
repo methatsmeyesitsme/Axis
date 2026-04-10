@@ -216,7 +216,7 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-5.2",
-      max_completion_tokens: 8192,
+      max_tokens: 8192,
       messages: chatMessages,
       stream: true,
     });
@@ -245,7 +245,7 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
         try {
           const titleResponse = await openai.chat.completions.create({
             model: "gpt-5.2",
-            max_completion_tokens: 15,
+            max_tokens: 15,
             messages: [
               {
                 role: "user",
@@ -285,6 +285,7 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
       res.end();
     }
   } catch (err) {
+    console.error("[Codex] OpenAI error:", err);
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
       res.end();

@@ -50,7 +50,7 @@ PLAN MODE IS ACTIVE: The user wants to think through and plan their approach, NO
   try {
     const stream = await openai.chat.completions.create({
       model: "gpt-5.2",
-      max_completion_tokens: 8192,
+      max_tokens: 8192,
       messages: formattedMessages,
       stream: true,
     });
@@ -67,7 +67,8 @@ PLAN MODE IS ACTIVE: The user wants to think through and plan their approach, NO
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     }
-  } catch {
+  } catch (err) {
+    console.error("[Cortex] OpenAI error:", err);
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
       res.end();

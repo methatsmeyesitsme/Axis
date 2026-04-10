@@ -26,7 +26,6 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
   const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [planMode, setPlanMode] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -134,7 +133,7 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
       const response = await fetch("/api/cortex/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMsg], planMode }),
+        body: JSON.stringify({ messages: [...messages, userMsg] }),
         signal: controller.signal,
       });
 
@@ -240,10 +239,6 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
               </Button>
             </div>
             <div className="flex items-center gap-2.5">
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
-                <input type="checkbox" checked={planMode} onChange={(e) => setPlanMode(e.target.checked)} className="rounded border-input w-3.5 h-3.5 accent-primary cursor-pointer" />
-                Plan
-              </label>
               <Button
                 className={`h-8 w-8 rounded-lg shrink-0 transition-colors ${isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
                 onClick={handleSend}
@@ -266,7 +261,7 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
           </div>
         </div>
         <p className="text-xs text-muted-foreground text-center mt-2">
-          {planMode ? "Plan mode on — Cortex will help you plan" : isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
+          {isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
         </p>
       </div>
     </div>
@@ -301,9 +296,6 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
           <span className="text-xs text-muted-foreground">General AI</span>
         </div>
         <div className="flex items-center gap-2">
-          {planMode && (
-            <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-medium">Plan Mode</span>
-          )}
           <Button variant="ghost" size="sm" className="text-xs text-muted-foreground h-7" onClick={() => { setMessages([]); setDisplayedContent(""); charQueueRef.current = ""; }}>
             New chat
           </Button>
