@@ -1,16 +1,20 @@
 import { useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import ChatArea from "@/components/ChatArea";
+import CortexArea from "@/components/CortexArea";
 import AuthModal from "@/components/AuthModal";
 import SettingsPanel from "@/components/SettingsPanel";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { LogIn } from "lucide-react";
 
+type Tab = "codex" | "cortex";
+
 export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>("codex");
   const { user, isLoading } = useAuth();
 
   return (
@@ -19,6 +23,8 @@ export default function Home() {
         activeConversationId={activeConversationId}
         onSelectConversation={setActiveConversationId}
         onOpenSettings={() => setShowSettings(true)}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
       />
       <div className="flex-1 flex flex-col min-w-0 relative">
         {!isLoading && !user && (
@@ -33,11 +39,15 @@ export default function Home() {
             </Button>
           </div>
         )}
-        <ChatArea
-          conversationId={activeConversationId}
-          onConversationCreated={(id) => setActiveConversationId(id)}
-          onOpenAuth={() => setShowAuth(true)}
-        />
+        {activeTab === "codex" ? (
+          <ChatArea
+            conversationId={activeConversationId}
+            onConversationCreated={(id) => setActiveConversationId(id)}
+            onOpenAuth={() => setShowAuth(true)}
+          />
+        ) : (
+          <CortexArea onOpenAuth={() => setShowAuth(true)} />
+        )}
       </div>
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}

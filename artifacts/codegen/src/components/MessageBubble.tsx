@@ -41,8 +41,8 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   const displayLang = language || "code";
 
   return (
-    <div className="my-4 rounded-xl overflow-hidden border border-gray-800 shadow-md">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#1a1f2e] border-b border-gray-800">
+    <div className="my-4 rounded-xl border border-gray-700 shadow-md">
+      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2 bg-[#1a1f2e] border-b border-gray-700 rounded-t-xl">
         <span className="text-xs font-mono text-gray-400">{displayLang}</span>
         <div className="flex items-center gap-1">
           <Button
@@ -69,21 +69,23 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
           </Button>
         </div>
       </div>
-      <SyntaxHighlighter
-        language={displayLang}
-        style={atomOneDark}
-        customStyle={{
-          margin: 0,
-          padding: "1rem",
-          fontSize: "0.8125rem",
-          lineHeight: "1.6",
-          background: "#1E293B",
-        }}
-        showLineNumbers
-        wrapLongLines={false}
-      >
-        {code}
-      </SyntaxHighlighter>
+      <div className="rounded-b-xl overflow-hidden">
+        <SyntaxHighlighter
+          language={displayLang}
+          style={atomOneDark}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            fontSize: "0.8125rem",
+            lineHeight: "1.6",
+            background: "#1E293B",
+          }}
+          showLineNumbers
+          wrapLongLines={false}
+        >
+          {code}
+        </SyntaxHighlighter>
+      </div>
     </div>
   );
 }
