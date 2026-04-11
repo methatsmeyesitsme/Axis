@@ -36,7 +36,6 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
     <div className="w-72 bg-sidebar border-r flex flex-col h-full flex-shrink-0">
       <div className="p-4 border-b flex items-center justify-between">
         <div className="flex items-center gap-2 text-primary font-semibold text-lg">
-          <Code2 className="w-6 h-6" />
           Axis
         </div>
       </div>
