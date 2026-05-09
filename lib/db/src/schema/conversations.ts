@@ -6,6 +6,7 @@ export const conversations = pgTable("conversations", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   language: text("language").notNull().default("TypeScript"),
+  source: text("source").notNull().default("axis"),
   userId: integer("user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

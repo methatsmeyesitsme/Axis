@@ -6,6 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface SendOpenaiMessageBody {
-  content: string;
+export interface ApiError {
+  error: string;
 }

@@ -10,7 +10,9 @@ tags:
   - name: health
     description: Health operations
   - name: openai
-    description: OpenAI AI chat operations
+    description: Axis AI chat operations
+  - name: cortex
+    description: Cortex AI chat operations
 paths:
   /healthz:
     get:
@@ -48,7 +50,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateOpenaiConversationBody"
+              $ref: "#/components/schemas/OpenaiConversationInput"
       responses:
         "201":
           description: Created conversation
@@ -79,7 +81,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OpenaiError"
+                $ref: "#/components/schemas/ApiError"
     delete:
       operationId: deleteOpenaiConversation
       tags: [openai]
@@ -98,7 +100,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OpenaiError"
+                $ref: "#/components/schemas/ApiError"
   /openai/conversations/{id}/messages:
     get:
       operationId: listOpenaiMessages
@@ -134,7 +136,122 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SendOpenaiMessageBody"
+              $ref: "#/components/schemas/OpenaiMessageInput"
+      responses:
+        "200":
+          description: SSE stream of assistant text chunks
+          content:
+            text/event-stream: {}
+  /cortex/conversations:
+    get:
+      operationId: listCortexConversations
+      tags: [cortex]
+      summary: List all Cortex conversations
+      responses:
+        "200":
+          description: List of conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CortexConversation"
+    post:
+      operationId: createCortexConversation
+      tags: [cortex]
+      summary: Create a new Cortex conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CortexConversationInput"
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CortexConversation"
+  /cortex/conversations/{id}:
+    get:
+      operationId: getCortexConversation
+      tags: [cortex]
+      summary: Get Cortex conversation with messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversation with messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CortexConversationWithMessages"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteCortexConversation
+      tags: [cortex]
+      summary: Delete a Cortex conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /cortex/conversations/{id}/messages:
+    get:
+      operationId: listCortexMessages
+      tags: [cortex]
+      summary: List messages in a Cortex conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CortexMessage"
+    post:
+      operationId: sendCortexMessage
+      tags: [cortex]
+      summary: Send a message to Cortex and receive a streaming response
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CortexMessageInput"
       responses:
         "200":
           description: SSE stream of assistant text chunks
@@ -149,6 +266,13 @@ components:
           type: string
       required:
         - status
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
     OpenaiConversation:
       type: object
       properties:
@@ -186,7 +310,7 @@ components:
         - role
         - content
         - createdAt
-    CreateOpenaiConversationBody:
+    OpenaiConversationInput:
       type: object
       properties:
         title:
@@ -196,7 +320,7 @@ components:
       required:
         - title
         - language
-    SendOpenaiMessageBody:
+    OpenaiMessageInput:
       type: object
       properties:
         content:
@@ -232,3 +356,70 @@ components:
           type: string
       required:
         - error
+    CortexConversation:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - createdAt
+    CortexMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversationId:
+          type: integer
+        role:
+          type: string
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - conversationId
+        - role
+        - content
+        - createdAt
+    CortexConversationInput:
+      type: object
+      properties:
+        title:
+          type: string
+      required:
+        - title
+    CortexMessageInput:
+      type: object
+      properties:
+        content:
+          type: string
+      required:
+        - content
+    CortexConversationWithMessages:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/CortexMessage"
+      required:
+        - id
+        - title
+        - createdAt
+        - messages

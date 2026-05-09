@@ -1,11 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  useGetCortexConversation,
+  useCreateCortexConversation,
+  useListCortexMessages,
+  getListCortexConversationsQueryKey,
+  getGetCortexConversationQueryKey,
+  getListCortexMessagesQueryKey,
+} from "@workspace/api-client-react";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Sparkles, Square, LogIn, Plus, Paperclip, X, ChevronDown } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 
 interface CortexAreaProps {
+  conversationId: number | null;
+  onConversationCreated: (id: number) => void;
   onOpenAuth: () => void;
 }
 
@@ -14,19 +25,15 @@ interface Attachment {
   content: string;
 }
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
+export default function CortexArea({ conversationId, onConversationCreated, onOpenAuth }: CortexAreaProps) {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const queryClient = useQueryClient();
   const [input, setInput] = useState("");
   const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -36,7 +43,15 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
   const charQueueRef = useRef<string>("");
   const displayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamDoneRef = useRef(false);
-  const pendingMessageRef = useRef<string>("");
+  const finalizeTargetRef = useRef<number | null>(null);
+
+  const { data: conversation } = useGetCortexConversation(conversationId!, {
+    query: { enabled: !!conversationId, queryKey: getGetCortexConversationQueryKey(conversationId!) },
+  });
+  const { data: serverMessages = [] } = useListCortexMessages(conversationId!, {
+    query: { enabled: !!conversationId, queryKey: getListCortexMessagesQueryKey(conversationId!) },
+  });
+  const createMutation = useCreateCortexConversation();
 
   const isNearBottom = useCallback(() => {
     if (!scrollRef.current) return true;
@@ -59,9 +74,8 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
 
   useEffect(() => {
     if (isNearBottom()) scrollToBottom();
-  }, [messages, displayedContent, scrollToBottom, isNearBottom]);
+  }, [serverMessages, displayedContent, scrollToBottom, isNearBottom]);
 
-  // Typewriter interval — drains queue, finalizes when done
   useEffect(() => {
     if (!isStreaming) return;
 
@@ -74,34 +88,40 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
         clearInterval(displayTimerRef.current!);
         displayTimerRef.current = null;
         streamDoneRef.current = false;
-        const finalMsg = pendingMessageRef.current;
-        pendingMessageRef.current = "";
+        const tid = finalizeTargetRef.current;
         setIsStreaming(false);
-        if (finalMsg) {
-          setMessages((prev) => [...prev, { role: "assistant", content: finalMsg }]);
-          setTimeout(() => setDisplayedContent(""), 600);
-        } else {
-          setDisplayedContent("");
+        if (tid) {
+          queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(tid) });
+          queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
         }
+        setTimeout(() => setDisplayedContent(""), 600);
       }
     }, 30);
 
     return () => {
       if (displayTimerRef.current) clearInterval(displayTimerRef.current);
     };
-  }, [isStreaming]);
+  }, [isStreaming, queryClient]);
+
+  useEffect(() => {
+    if (pendingTitle) {
+      queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
+      if (conversationId) queryClient.invalidateQueries({ queryKey: getGetCortexConversationQueryKey(conversationId) });
+      setPendingTitle(null);
+    }
+  }, [pendingTitle, conversationId, queryClient]);
 
   const handleCancel = () => {
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     if (displayTimerRef.current) clearInterval(displayTimerRef.current);
-    const partial = pendingMessageRef.current;
-    pendingMessageRef.current = "";
     charQueueRef.current = "";
     streamDoneRef.current = false;
     setIsStreaming(false);
     setIsThinking(false);
     setDisplayedContent("");
-    if (partial) setMessages((prev) => [...prev, { role: "assistant", content: partial }]);
+    if (conversationId) {
+      queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(conversationId) });
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -130,16 +150,22 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
     if (!input.trim() && attachments.length === 0) return;
 
     const attachmentText = attachments.map((a) => a.content).join("\n\n");
-    const fullInput = attachmentText ? `${attachmentText}\n\n${input}` : input;
-    const userMsg: ChatMessage = { role: "user", content: fullInput };
+    const fullContent = attachmentText ? `${attachmentText}\n\n${input}` : input;
 
-    setMessages((prev) => [...prev, userMsg]);
+    let targetId = conversationId;
     setInput("");
     setAttachments([]);
 
+    if (!targetId) {
+      const newConv = await createMutation.mutateAsync({ data: { title: "New Chat" } });
+      targetId = newConv.id;
+      onConversationCreated(targetId);
+      queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
+    }
+
     charQueueRef.current = "";
-    pendingMessageRef.current = "";
     streamDoneRef.current = false;
+    finalizeTargetRef.current = targetId;
     setDisplayedContent("");
     setIsThinking(true);
     setIsStreaming(false);
@@ -148,10 +174,10 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
     abortRef.current = controller;
 
     try {
-      const response = await fetch("/api/cortex/chat", {
+      const response = await fetch(`/api/cortex/conversations/${targetId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMsg] }),
+        body: JSON.stringify({ content: fullContent }),
         signal: controller.signal,
       });
 
@@ -178,24 +204,20 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
           try {
             const data = JSON.parse(trimmed.slice(6));
             if (data.content) {
-              pendingMessageRef.current += data.content as string;
               charQueueRef.current += data.content as string;
             }
             if (data.error) {
-              const errMsg = `Sorry, something went wrong: ${data.error}`;
-              charQueueRef.current += errMsg;
-              pendingMessageRef.current += errMsg;
+              charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
               done = true;
             }
+            if (data.titleUpdate) setPendingTitle(data.titleUpdate as string);
             if (data.done) done = true;
           } catch { /* ignore */ }
         }
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== "AbortError") {
-        const errMsg = "Connection error. Please try again.";
-        charQueueRef.current += errMsg;
-        pendingMessageRef.current += errMsg;
+        charQueueRef.current += "Connection error. Please try again.";
       }
       setIsThinking(false);
     } finally {
@@ -205,7 +227,11 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
       if (charQueueRef.current.length === 0) {
         streamDoneRef.current = false;
         setIsStreaming(false);
-        setDisplayedContent("");
+        const tid = finalizeTargetRef.current;
+        if (tid) {
+          queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(tid) });
+          queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
+        }
       }
     }
   };
@@ -285,7 +311,7 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
     </div>
   );
 
-  if (messages.length === 0 && !isStreaming && !isThinking) {
+  if (!conversationId) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background">
         <div className="text-center px-8 pt-10 pb-0">
@@ -307,24 +333,18 @@ export default function CortexArea({ onOpenAuth }: CortexAreaProps) {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
-      <div className="h-14 border-b flex items-center justify-between px-6 bg-card shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-primary" />
-          <span className="font-semibold text-sm">Cortex</span>
+      <div className="h-14 border-b flex items-center px-6 bg-card shrink-0">
+        <div className="flex flex-col">
+          <span className="font-semibold text-sm">{conversation?.title ?? "Loading..."}</span>
           <span className="text-xs text-muted-foreground">General AI</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground h-7" onClick={() => { setMessages([]); setDisplayedContent(""); charQueueRef.current = ""; }}>
-            New chat
-          </Button>
         </div>
       </div>
 
       <div className="flex-1 relative overflow-hidden">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
           <div className="max-w-4xl mx-auto space-y-6 pb-4">
-            {messages.map((msg, i) => (
-              <MessageBubble key={i} role={msg.role} content={msg.content} />
+            {serverMessages.map((msg) => (
+              <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
             ))}
             {(isThinking || isStreaming) && (
               <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} />

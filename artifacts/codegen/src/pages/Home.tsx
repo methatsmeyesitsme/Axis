@@ -12,6 +12,7 @@ type Tab = "codex" | "cortex";
 
 export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const [activeCortexConversationId, setActiveCortexConversationId] = useState<number | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("codex");
@@ -22,6 +23,8 @@ export default function Home() {
       <Sidebar
         activeConversationId={activeConversationId}
         onSelectConversation={setActiveConversationId}
+        activeCortexConversationId={activeCortexConversationId}
+        onSelectCortexConversation={setActiveCortexConversationId}
         onOpenSettings={() => setShowSettings(true)}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -46,7 +49,11 @@ export default function Home() {
             onOpenAuth={() => setShowAuth(true)}
           />
         ) : (
-          <CortexArea onOpenAuth={() => setShowAuth(true)} />
+          <CortexArea
+            conversationId={activeCortexConversationId}
+            onConversationCreated={(id) => setActiveCortexConversationId(id)}
+            onOpenAuth={() => setShowAuth(true)}
+          />
         )}
       </div>
 

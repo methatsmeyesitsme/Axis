@@ -1,6 +1,10 @@
-import { 
-  useListOpenaiConversations, 
-  useDeleteOpenaiConversation 
+import {
+  useListOpenaiConversations,
+  useDeleteOpenaiConversation,
+  useListCortexConversations,
+  useDeleteCortexConversation,
+  getListOpenaiConversationsQueryKey,
+  getListCortexConversationsQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Plus, MessageSquare, Trash2, Code2, Settings, Sparkles } from "lucide-react";
@@ -12,22 +16,44 @@ type Tab = "codex" | "cortex";
 interface SidebarProps {
   activeConversationId: number | null;
   onSelectConversation: (id: number | null) => void;
+  activeCortexConversationId: number | null;
+  onSelectCortexConversation: (id: number | null) => void;
   onOpenSettings: () => void;
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
 }
 
-export default function Sidebar({ activeConversationId, onSelectConversation, onOpenSettings, activeTab, onTabChange }: SidebarProps) {
+export default function Sidebar({
+  activeConversationId,
+  onSelectConversation,
+  activeCortexConversationId,
+  onSelectCortexConversation,
+  onOpenSettings,
+  activeTab,
+  onTabChange,
+}: SidebarProps) {
   const queryClient = useQueryClient();
-  const { data: conversations = [], isLoading } = useListOpenaiConversations();
-  const deleteMutation = useDeleteOpenaiConversation();
+  const { data: conversations = [], isLoading: axisLoading } = useListOpenaiConversations();
+  const { data: cortexConversations = [], isLoading: cortexLoading } = useListCortexConversations();
+  const deleteAxisMutation = useDeleteOpenaiConversation();
+  const deleteCortexMutation = useDeleteCortexConversation();
 
-  const handleDelete = (id: number, e: React.MouseEvent) => {
+  const handleDeleteAxis = (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    deleteMutation.mutate({ id }, {
+    deleteAxisMutation.mutate({ id }, {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/openai/conversations"] });
+        queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         if (activeConversationId === id) onSelectConversation(null);
+      }
+    });
+  };
+
+  const handleDeleteCortex = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteCortexMutation.mutate({ id }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
+        if (activeCortexConversationId === id) onSelectCortexConversation(null);
       }
     });
   };
@@ -36,7 +62,7 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
     <div className="w-72 bg-sidebar border-r flex flex-col h-full flex-shrink-0">
       <div className="p-4 border-b flex items-center justify-between">
         <div className="flex items-center gap-2 text-primary font-semibold text-lg">
-          Axis
+          {activeTab === "codex" ? "Axis" : "Cortex"}
         </div>
       </div>
 
@@ -67,22 +93,20 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
         </div>
       </div>
 
-      {activeTab === "codex" && (
-        <div className="p-3 pt-2">
-          <Button
-            className="w-full justify-start gap-2 bg-primary hover:bg-primary/90 text-white font-medium shadow-sm"
-            onClick={() => onSelectConversation(null)}
-          >
-            <Plus className="w-4 h-4" />
-            New Chat
-          </Button>
-        </div>
-      )}
+      <div className="p-3 pt-2">
+        <Button
+          className="w-full justify-start gap-2 bg-primary hover:bg-primary/90 text-white font-medium shadow-sm"
+          onClick={() => activeTab === "codex" ? onSelectConversation(null) : onSelectCortexConversation(null)}
+        >
+          <Plus className="w-4 h-4" />
+          New Chat
+        </Button>
+      </div>
 
       {activeTab === "codex" ? (
         <ScrollArea className="flex-1 px-3">
           <div className="space-y-1 pb-4">
-            {isLoading ? (
+            {axisLoading ? (
               <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
             ) : conversations.length === 0 ? (
               <div className="px-2 py-8 text-sm text-muted-foreground text-center">No past chats</div>
@@ -108,8 +132,8 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive shrink-0 transition-opacity"
-                    onClick={(e) => handleDelete(conv.id, e)}
-                    disabled={deleteMutation.isPending}
+                    onClick={(e) => handleDeleteAxis(conv.id, e)}
+                    disabled={deleteAxisMutation.isPending}
                   >
                     <Trash2 className="w-4 h-4" />
                   </Button>
@@ -119,10 +143,43 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
           </div>
         </ScrollArea>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center px-4 text-center gap-2">
-          <Sparkles className="w-8 h-8 text-primary/40" />
-          <p className="text-sm text-muted-foreground">Cortex keeps chats in memory during your session</p>
-        </div>
+        <ScrollArea className="flex-1 px-3">
+          <div className="space-y-1 pb-4">
+            {cortexLoading ? (
+              <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
+            ) : cortexConversations.length === 0 ? (
+              <div className="px-2 py-8 text-sm text-muted-foreground text-center">No past chats</div>
+            ) : (
+              cortexConversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => onSelectCortexConversation(conv.id)}
+                  className={`group flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer transition-colors ${
+                    activeCortexConversationId === conv.id
+                      ? "bg-primary/10 text-primary"
+                      : "hover:bg-muted text-foreground"
+                  }`}
+                >
+                  <div className="flex flex-col overflow-hidden gap-1">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
+                      <span className="text-sm font-medium truncate">{conv.title || "New Chat"}</span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive shrink-0 transition-opacity"
+                    onClick={(e) => handleDeleteCortex(conv.id, e)}
+                    disabled={deleteCortexMutation.isPending}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </ScrollArea>
       )}
 
       <div className="shrink-0">

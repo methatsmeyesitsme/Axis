@@ -9,6 +9,10 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface ApiError {
+  error: string;
+}
+
 export interface OpenaiConversation {
   id: number;
   title: string;
@@ -24,12 +28,12 @@ export interface OpenaiMessage {
   createdAt: string;
 }
 
-export interface CreateOpenaiConversationBody {
+export interface OpenaiConversationInput {
   title: string;
   language: string;
 }
 
-export interface SendOpenaiMessageBody {
+export interface OpenaiMessageInput {
   content: string;
 }
 
@@ -43,4 +47,33 @@ export interface OpenaiConversationWithMessages {
 
 export interface OpenaiError {
   error: string;
+}
+
+export interface CortexConversation {
+  id: number;
+  title: string;
+  createdAt: string;
+}
+
+export interface CortexMessage {
+  id: number;
+  conversationId: number;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface CortexConversationInput {
+  title: string;
+}
+
+export interface CortexMessageInput {
+  content: string;
+}
+
+export interface CortexConversationWithMessages {
+  id: number;
+  title: string;
+  createdAt: string;
+  messages: CortexMessage[];
 }

@@ -17,13 +17,18 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
-  CreateOpenaiConversationBody,
+  ApiError,
+  CortexConversation,
+  CortexConversationInput,
+  CortexConversationWithMessages,
+  CortexMessage,
+  CortexMessageInput,
   HealthStatus,
   OpenaiConversation,
+  OpenaiConversationInput,
   OpenaiConversationWithMessages,
-  OpenaiError,
   OpenaiMessage,
-  SendOpenaiMessageBody,
+  OpenaiMessageInput,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -195,14 +200,14 @@ export const getCreateOpenaiConversationUrl = () => {
 };
 
 export const createOpenaiConversation = async (
-  createOpenaiConversationBody: CreateOpenaiConversationBody,
+  openaiConversationInput: OpenaiConversationInput,
   options?: RequestInit,
 ): Promise<OpenaiConversation> => {
   return customFetch<OpenaiConversation>(getCreateOpenaiConversationUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(createOpenaiConversationBody),
+    body: JSON.stringify(openaiConversationInput),
   });
 };
 
@@ -213,14 +218,14 @@ export const getCreateOpenaiConversationMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof createOpenaiConversation>>,
     TError,
-    { data: BodyType<CreateOpenaiConversationBody> },
+    { data: BodyType<OpenaiConversationInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof createOpenaiConversation>>,
   TError,
-  { data: BodyType<CreateOpenaiConversationBody> },
+  { data: BodyType<OpenaiConversationInput> },
   TContext
 > => {
   const mutationKey = ["createOpenaiConversation"];
@@ -234,7 +239,7 @@ export const getCreateOpenaiConversationMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof createOpenaiConversation>>,
-    { data: BodyType<CreateOpenaiConversationBody> }
+    { data: BodyType<OpenaiConversationInput> }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -248,7 +253,7 @@ export type CreateOpenaiConversationMutationResult = NonNullable<
   Awaited<ReturnType<typeof createOpenaiConversation>>
 >;
 export type CreateOpenaiConversationMutationBody =
-  BodyType<CreateOpenaiConversationBody>;
+  BodyType<OpenaiConversationInput>;
 export type CreateOpenaiConversationMutationError = ErrorType<unknown>;
 
 /**
@@ -261,14 +266,14 @@ export const useCreateOpenaiConversation = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof createOpenaiConversation>>,
     TError,
-    { data: BodyType<CreateOpenaiConversationBody> },
+    { data: BodyType<OpenaiConversationInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof createOpenaiConversation>>,
   TError,
-  { data: BodyType<CreateOpenaiConversationBody> },
+  { data: BodyType<OpenaiConversationInput> },
   TContext
 > => {
   return useMutation(getCreateOpenaiConversationMutationOptions(options));
@@ -300,7 +305,7 @@ export const getGetOpenaiConversationQueryKey = (id: number) => {
 
 export const getGetOpenaiConversationQueryOptions = <
   TData = Awaited<ReturnType<typeof getOpenaiConversation>>,
-  TError = ErrorType<OpenaiError>,
+  TError = ErrorType<ApiError>,
 >(
   id: number,
   options?: {
@@ -336,7 +341,7 @@ export const getGetOpenaiConversationQueryOptions = <
 export type GetOpenaiConversationQueryResult = NonNullable<
   Awaited<ReturnType<typeof getOpenaiConversation>>
 >;
-export type GetOpenaiConversationQueryError = ErrorType<OpenaiError>;
+export type GetOpenaiConversationQueryError = ErrorType<ApiError>;
 
 /**
  * @summary Get conversation with messages
@@ -344,7 +349,7 @@ export type GetOpenaiConversationQueryError = ErrorType<OpenaiError>;
 
 export function useGetOpenaiConversation<
   TData = Awaited<ReturnType<typeof getOpenaiConversation>>,
-  TError = ErrorType<OpenaiError>,
+  TError = ErrorType<ApiError>,
 >(
   id: number,
   options?: {
@@ -383,7 +388,7 @@ export const deleteOpenaiConversation = async (
 };
 
 export const getDeleteOpenaiConversationMutationOptions = <
-  TError = ErrorType<OpenaiError>,
+  TError = ErrorType<ApiError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -424,13 +429,13 @@ export type DeleteOpenaiConversationMutationResult = NonNullable<
   Awaited<ReturnType<typeof deleteOpenaiConversation>>
 >;
 
-export type DeleteOpenaiConversationMutationError = ErrorType<OpenaiError>;
+export type DeleteOpenaiConversationMutationError = ErrorType<ApiError>;
 
 /**
  * @summary Delete a conversation
  */
 export const useDeleteOpenaiConversation = <
-  TError = ErrorType<OpenaiError>,
+  TError = ErrorType<ApiError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -545,14 +550,14 @@ export const getSendOpenaiMessageUrl = (id: number) => {
 
 export const sendOpenaiMessage = async (
   id: number,
-  sendOpenaiMessageBody: SendOpenaiMessageBody,
+  openaiMessageInput: OpenaiMessageInput,
   options?: RequestInit,
 ): Promise<unknown> => {
   return customFetch<unknown>(getSendOpenaiMessageUrl(id), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(sendOpenaiMessageBody),
+    body: JSON.stringify(openaiMessageInput),
   });
 };
 
@@ -563,14 +568,14 @@ export const getSendOpenaiMessageMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof sendOpenaiMessage>>,
     TError,
-    { id: number; data: BodyType<SendOpenaiMessageBody> },
+    { id: number; data: BodyType<OpenaiMessageInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof sendOpenaiMessage>>,
   TError,
-  { id: number; data: BodyType<SendOpenaiMessageBody> },
+  { id: number; data: BodyType<OpenaiMessageInput> },
   TContext
 > => {
   const mutationKey = ["sendOpenaiMessage"];
@@ -584,7 +589,7 @@ export const getSendOpenaiMessageMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof sendOpenaiMessage>>,
-    { id: number; data: BodyType<SendOpenaiMessageBody> }
+    { id: number; data: BodyType<OpenaiMessageInput> }
   > = (props) => {
     const { id, data } = props ?? {};
 
@@ -597,7 +602,7 @@ export const getSendOpenaiMessageMutationOptions = <
 export type SendOpenaiMessageMutationResult = NonNullable<
   Awaited<ReturnType<typeof sendOpenaiMessage>>
 >;
-export type SendOpenaiMessageMutationBody = BodyType<SendOpenaiMessageBody>;
+export type SendOpenaiMessageMutationBody = BodyType<OpenaiMessageInput>;
 export type SendOpenaiMessageMutationError = ErrorType<unknown>;
 
 /**
@@ -610,15 +615,527 @@ export const useSendOpenaiMessage = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof sendOpenaiMessage>>,
     TError,
-    { id: number; data: BodyType<SendOpenaiMessageBody> },
+    { id: number; data: BodyType<OpenaiMessageInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof sendOpenaiMessage>>,
   TError,
-  { id: number; data: BodyType<SendOpenaiMessageBody> },
+  { id: number; data: BodyType<OpenaiMessageInput> },
   TContext
 > => {
   return useMutation(getSendOpenaiMessageMutationOptions(options));
+};
+
+/**
+ * @summary List all Cortex conversations
+ */
+export const getListCortexConversationsUrl = () => {
+  return `/api/cortex/conversations`;
+};
+
+export const listCortexConversations = async (
+  options?: RequestInit,
+): Promise<CortexConversation[]> => {
+  return customFetch<CortexConversation[]>(getListCortexConversationsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListCortexConversationsQueryKey = () => {
+  return [`/api/cortex/conversations`] as const;
+};
+
+export const getListCortexConversationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCortexConversations>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listCortexConversations>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListCortexConversationsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCortexConversations>>
+  > = ({ signal }) => listCortexConversations({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCortexConversations>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListCortexConversationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCortexConversations>>
+>;
+export type ListCortexConversationsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all Cortex conversations
+ */
+
+export function useListCortexConversations<
+  TData = Awaited<ReturnType<typeof listCortexConversations>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listCortexConversations>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListCortexConversationsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a new Cortex conversation
+ */
+export const getCreateCortexConversationUrl = () => {
+  return `/api/cortex/conversations`;
+};
+
+export const createCortexConversation = async (
+  cortexConversationInput: CortexConversationInput,
+  options?: RequestInit,
+): Promise<CortexConversation> => {
+  return customFetch<CortexConversation>(getCreateCortexConversationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(cortexConversationInput),
+  });
+};
+
+export const getCreateCortexConversationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCortexConversation>>,
+    TError,
+    { data: BodyType<CortexConversationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createCortexConversation>>,
+  TError,
+  { data: BodyType<CortexConversationInput> },
+  TContext
+> => {
+  const mutationKey = ["createCortexConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createCortexConversation>>,
+    { data: BodyType<CortexConversationInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createCortexConversation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateCortexConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createCortexConversation>>
+>;
+export type CreateCortexConversationMutationBody =
+  BodyType<CortexConversationInput>;
+export type CreateCortexConversationMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a new Cortex conversation
+ */
+export const useCreateCortexConversation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCortexConversation>>,
+    TError,
+    { data: BodyType<CortexConversationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createCortexConversation>>,
+  TError,
+  { data: BodyType<CortexConversationInput> },
+  TContext
+> => {
+  return useMutation(getCreateCortexConversationMutationOptions(options));
+};
+
+/**
+ * @summary Get Cortex conversation with messages
+ */
+export const getGetCortexConversationUrl = (id: number) => {
+  return `/api/cortex/conversations/${id}`;
+};
+
+export const getCortexConversation = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CortexConversationWithMessages> => {
+  return customFetch<CortexConversationWithMessages>(
+    getGetCortexConversationUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCortexConversationQueryKey = (id: number) => {
+  return [`/api/cortex/conversations/${id}`] as const;
+};
+
+export const getGetCortexConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCortexConversation>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCortexConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCortexConversationQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCortexConversation>>
+  > = ({ signal }) => getCortexConversation(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCortexConversation>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCortexConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCortexConversation>>
+>;
+export type GetCortexConversationQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get Cortex conversation with messages
+ */
+
+export function useGetCortexConversation<
+  TData = Awaited<ReturnType<typeof getCortexConversation>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCortexConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCortexConversationQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Delete a Cortex conversation
+ */
+export const getDeleteCortexConversationUrl = (id: number) => {
+  return `/api/cortex/conversations/${id}`;
+};
+
+export const deleteCortexConversation = async (
+  id: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteCortexConversationUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteCortexConversationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteCortexConversation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteCortexConversation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteCortexConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteCortexConversation>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteCortexConversation(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteCortexConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteCortexConversation>>
+>;
+
+export type DeleteCortexConversationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Delete a Cortex conversation
+ */
+export const useDeleteCortexConversation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteCortexConversation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteCortexConversation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteCortexConversationMutationOptions(options));
+};
+
+/**
+ * @summary List messages in a Cortex conversation
+ */
+export const getListCortexMessagesUrl = (id: number) => {
+  return `/api/cortex/conversations/${id}/messages`;
+};
+
+export const listCortexMessages = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CortexMessage[]> => {
+  return customFetch<CortexMessage[]>(getListCortexMessagesUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListCortexMessagesQueryKey = (id: number) => {
+  return [`/api/cortex/conversations/${id}/messages`] as const;
+};
+
+export const getListCortexMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCortexMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listCortexMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListCortexMessagesQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCortexMessages>>
+  > = ({ signal }) => listCortexMessages(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCortexMessages>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListCortexMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCortexMessages>>
+>;
+export type ListCortexMessagesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List messages in a Cortex conversation
+ */
+
+export function useListCortexMessages<
+  TData = Awaited<ReturnType<typeof listCortexMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listCortexMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListCortexMessagesQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Send a message to Cortex and receive a streaming response
+ */
+export const getSendCortexMessageUrl = (id: number) => {
+  return `/api/cortex/conversations/${id}/messages`;
+};
+
+export const sendCortexMessage = async (
+  id: number,
+  cortexMessageInput: CortexMessageInput,
+  options?: RequestInit,
+): Promise<unknown> => {
+  return customFetch<unknown>(getSendCortexMessageUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(cortexMessageInput),
+  });
+};
+
+export const getSendCortexMessageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendCortexMessage>>,
+    TError,
+    { id: number; data: BodyType<CortexMessageInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendCortexMessage>>,
+  TError,
+  { id: number; data: BodyType<CortexMessageInput> },
+  TContext
+> => {
+  const mutationKey = ["sendCortexMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendCortexMessage>>,
+    { id: number; data: BodyType<CortexMessageInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return sendCortexMessage(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendCortexMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendCortexMessage>>
+>;
+export type SendCortexMessageMutationBody = BodyType<CortexMessageInput>;
+export type SendCortexMessageMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send a message to Cortex and receive a streaming response
+ */
+export const useSendCortexMessage = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendCortexMessage>>,
+    TError,
+    { id: number; data: BodyType<CortexMessageInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendCortexMessage>>,
+  TError,
+  { id: number; data: BodyType<CortexMessageInput> },
+  TContext
+> => {
+  return useMutation(getSendCortexMessageMutationOptions(options));
 };

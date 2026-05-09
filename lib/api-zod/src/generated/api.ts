@@ -94,3 +94,80 @@ export const SendOpenaiMessageParams = zod.object({
 export const SendOpenaiMessageBody = zod.object({
   content: zod.string(),
 });
+
+/**
+ * @summary List all Cortex conversations
+ */
+export const ListCortexConversationsResponseItem = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListCortexConversationsResponse = zod.array(
+  ListCortexConversationsResponseItem,
+);
+
+/**
+ * @summary Create a new Cortex conversation
+ */
+export const CreateCortexConversationBody = zod.object({
+  title: zod.string(),
+});
+
+/**
+ * @summary Get Cortex conversation with messages
+ */
+export const GetCortexConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetCortexConversationResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
+  messages: zod.array(
+    zod.object({
+      id: zod.number(),
+      conversationId: zod.number(),
+      role: zod.string(),
+      content: zod.string(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Delete a Cortex conversation
+ */
+export const DeleteCortexConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+/**
+ * @summary List messages in a Cortex conversation
+ */
+export const ListCortexMessagesParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ListCortexMessagesResponseItem = zod.object({
+  id: zod.number(),
+  conversationId: zod.number(),
+  role: zod.string(),
+  content: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListCortexMessagesResponse = zod.array(
+  ListCortexMessagesResponseItem,
+);
+
+/**
+ * @summary Send a message to Cortex and receive a streaming response
+ */
+export const SendCortexMessageParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const SendCortexMessageBody = zod.object({
+  content: zod.string(),
+});
