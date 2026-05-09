@@ -36,7 +36,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, MessageSquare, Code2, Settings, Sparkles, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Plus, MessageSquare, Code2, Settings, Sparkles, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -92,9 +92,9 @@ function ConversationItem({
         <DropdownMenuTrigger asChild>
           <button
             onClick={(e) => e.stopPropagation()}
-            className="h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-muted-foreground/15 transition-opacity shrink-0 ml-1"
+            className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted-foreground/15 transition-colors shrink-0 ml-1"
           >
-            <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
+            <MoreVertical className="w-4 h-4 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-36" onClick={(e) => e.stopPropagation()}>
