@@ -4,8 +4,8 @@ import {
   CreateOpenaiConversationBody,
   SendOpenaiMessageBody,
 } from "@workspace/api-zod";
-import { openai } from "@workspace/integrations-openai-ai-server";
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { ai } from "@workspace/integrations-gemini-ai";
+import { eq, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -196,13 +196,12 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
 - End responses with a question or suggestion that keeps the planning conversation moving forward`;
   }
 
-  const chatMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
-    { role: "system", content: systemPrompt },
+  const chatMessages = [
     ...history.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
+      role: m.role === "assistant" ? "model" : ("user" as "model" | "user"),
+      parts: [{ text: m.content }],
     })),
-    { role: "user", content: body.content },
+    { role: "user" as const, parts: [{ text: body.content }] },
   ];
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -214,19 +213,21 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
   let fullResponse = "";
 
   try {
-    const stream = await openai.chat.completions.create({
-      model: "gpt-5.2",
-      max_tokens: 8192,
-      messages: chatMessages,
-      stream: true,
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents: chatMessages,
+      config: {
+        maxOutputTokens: 8192,
+        systemInstruction: systemPrompt,
+      },
     });
 
     for await (const chunk of stream) {
       if (res.writableEnded) break;
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        fullResponse += content;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      const text = chunk.text;
+      if (text) {
+        fullResponse += text;
+        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
       }
     }
 
@@ -241,20 +242,22 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
       if (isFirstMessage) {
         let newTitle: string | null = null;
 
-        // Try AI title generation first
         try {
-          const titleResponse = await openai.chat.completions.create({
-            model: "gpt-5.2",
-            max_tokens: 15,
-            messages: [
+          const titleResponse = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
               {
                 role: "user",
-                content: `Create a short title (3-5 words max) summarizing this coding request: "${body.content.slice(0, 300)}". Reply with ONLY the title, no quotes, no punctuation at end, no markdown.`,
+                parts: [
+                  {
+                    text: `Create a short title (3-5 words max) summarizing this coding request: "${body.content.slice(0, 300)}". Reply with ONLY the title, no quotes, no punctuation at end, no markdown.`,
+                  },
+                ],
               },
             ],
-            stream: false,
+            config: { maxOutputTokens: 15 },
           });
-          const candidate = titleResponse.choices[0]?.message?.content?.trim();
+          const candidate = titleResponse.text?.trim();
           if (candidate && candidate.length > 0 && candidate.length < 80) {
             newTitle = candidate;
           }
@@ -262,7 +265,6 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
           // fall through to text extraction
         }
 
-        // Fallback: extract meaningful words from the first message
         if (!newTitle) {
           const cleaned = body.content
             .replace(/```[\s\S]*?```/g, "")
@@ -285,7 +287,7 @@ PLAN MODE IS ACTIVE — The user wants to PLAN their code, not write it yet. You
       res.end();
     }
   } catch (err) {
-    console.error("[Codex] OpenAI error:", err);
+    req.log.error({ err }, "[Axis] Gemini error");
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
       res.end();

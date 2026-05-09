@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { ai } from "@workspace/integrations-gemini-ai";
 
 const router: IRouter = Router();
 
@@ -33,13 +33,10 @@ PLAN MODE IS ACTIVE: The user wants to think through and plan their approach, NO
 - End your responses with a question or suggestion that moves the planning forward`;
   }
 
-  const formattedMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
-    { role: "system", content: systemPrompt },
-    ...chatHistory.map((m: { role: string; content: string }) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    })),
-  ];
+  const contents = (chatHistory as { role: string; content: string }[]).map((m) => ({
+    role: m.role === "assistant" ? "model" : ("user" as "model" | "user"),
+    parts: [{ text: m.content }],
+  }));
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -48,18 +45,20 @@ PLAN MODE IS ACTIVE: The user wants to think through and plan their approach, NO
   res.flushHeaders();
 
   try {
-    const stream = await openai.chat.completions.create({
-      model: "gpt-5.2",
-      max_tokens: 8192,
-      messages: formattedMessages,
-      stream: true,
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents,
+      config: {
+        maxOutputTokens: 8192,
+        systemInstruction: systemPrompt,
+      },
     });
 
     for await (const chunk of stream) {
       if (res.writableEnded) break;
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      const text = chunk.text;
+      if (text) {
+        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
       }
     }
 
@@ -68,7 +67,7 @@ PLAN MODE IS ACTIVE: The user wants to think through and plan their approach, NO
       res.end();
     }
   } catch (err) {
-    console.error("[Cortex] OpenAI error:", err);
+    req.log.error({ err }, "[Cortex] Gemini error");
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
       res.end();
