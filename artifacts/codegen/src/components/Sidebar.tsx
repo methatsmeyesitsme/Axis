@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   useListOpenaiConversations,
   useDeleteOpenaiConversation,
@@ -12,12 +12,6 @@ import {
   getGetCortexConversationQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,7 +32,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Plus, MessageSquare, Code2, Settings, Sparkles, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Tab = "codex" | "cortex";
 
@@ -71,49 +64,127 @@ function ConversationItem({
   onRename: () => void;
   onDelete: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
+
   return (
     <div
       onClick={onSelect}
-      className={`group flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer transition-colors ${
+      style={{ position: "relative" }}
+      className={`px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
         isActive ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
       }`}
     >
-      <div className="flex flex-col overflow-hidden gap-1 flex-1 min-w-0">
+      {/* Text content — padded right so the absolute button doesn't overlap */}
+      <div style={{ paddingRight: 28 }}>
         <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
-          <span className="text-sm font-medium truncate">{conv.title || "New Chat"}</span>
+          <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60" />
+          <span className="text-sm font-medium truncate block">{conv.title || "New Chat"}</span>
         </div>
         {conv.subtitle && (
-          <span className="text-xs text-muted-foreground ml-6 truncate">{conv.subtitle}</span>
+          <span className="text-xs text-muted-foreground ml-5 block truncate">{conv.subtitle}</span>
         )}
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
+      {/* Three-dot button — absolutely anchored to the right edge */}
+      <div
+        ref={menuRef}
+        style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)" }}
+      >
+        <button
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            border: "none",
+            background: menuOpen ? "rgba(0,0,0,0.08)" : "transparent",
+            cursor: "pointer",
+            padding: 0,
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.06)"; }}
+          onMouseLeave={(e) => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          title="More options"
+        >
+          <MoreVertical style={{ width: 14, height: 14, color: "#6b7280" }} />
+        </button>
+
+        {menuOpen && (
+          <div
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 28,
+              zIndex: 9999,
+              width: 144,
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              background: "#ffffff",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+              padding: "4px 0",
+            }}
             onClick={(e) => e.stopPropagation()}
-            className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted-foreground/15 transition-colors shrink-0 ml-1"
           >
-            <MoreVertical className="w-4 h-4 text-muted-foreground" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-36" onClick={(e) => e.stopPropagation()}>
-          <DropdownMenuItem
-            onClick={(e) => { e.stopPropagation(); onRename(); }}
-            className="gap-2 cursor-pointer"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-            Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <button
+              onClick={() => { setMenuOpen(false); onRename(); }}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                fontSize: 14,
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                color: "#111827",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+            >
+              <Pencil style={{ width: 13, height: 13 }} />
+              Rename
+            </button>
+            <button
+              onClick={() => { setMenuOpen(false); onDelete(); }}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                fontSize: 14,
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                color: "#ef4444",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fef2f2"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+            >
+              <Trash2 style={{ width: 13, height: 13 }} />
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -244,7 +315,7 @@ export default function Sidebar({
         </div>
 
         {activeTab === "codex" ? (
-          <ScrollArea className="flex-1 px-3">
+          <div className="flex-1 overflow-y-auto px-3 min-h-0">
             <div className="space-y-1 pb-4">
               {axisLoading ? (
                 <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
@@ -263,9 +334,9 @@ export default function Sidebar({
                 ))
               )}
             </div>
-          </ScrollArea>
+          </div>
         ) : (
-          <ScrollArea className="flex-1 px-3">
+          <div className="flex-1 overflow-y-auto px-3 min-h-0">
             <div className="space-y-1 pb-4">
               {cortexLoading ? (
                 <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
@@ -284,7 +355,7 @@ export default function Sidebar({
                 ))
               )}
             </div>
-          </ScrollArea>
+          </div>
         )}
 
         <div className="shrink-0">

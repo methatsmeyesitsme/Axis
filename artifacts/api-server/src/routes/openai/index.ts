@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai } from "@workspace/integrations-gemini-ai";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, isNull } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -56,15 +56,11 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 router.get("/conversations", async (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    res.json([]);
-    return;
-  }
+  const userId = req.session?.userId ?? null;
   const result = await db
     .select()
     .from(conversations)
-    .where(eq(conversations.userId, userId))
+    .where(userId ? eq(conversations.userId, userId) : isNull(conversations.userId))
     .orderBy(desc(conversations.createdAt));
   res.json(
     result.filter((c) => c.source === "axis").map((c) => ({
