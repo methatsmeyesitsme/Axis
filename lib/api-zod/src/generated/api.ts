@@ -60,6 +60,24 @@ export const GetOpenaiConversationResponse = zod.object({
 });
 
 /**
+ * @summary Rename a conversation
+ */
+export const RenameOpenaiConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RenameOpenaiConversationBody = zod.object({
+  title: zod.string(),
+});
+
+export const RenameOpenaiConversationResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  language: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
  * @summary Delete a conversation
  */
 export const DeleteOpenaiConversationParams = zod.object({
@@ -134,6 +152,23 @@ export const GetCortexConversationResponse = zod.object({
       createdAt: zod.coerce.date(),
     }),
   ),
+});
+
+/**
+ * @summary Rename a Cortex conversation
+ */
+export const RenameCortexConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RenameCortexConversationBody = zod.object({
+  title: zod.string(),
+});
+
+export const RenameCortexConversationResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
 });
 
 /**

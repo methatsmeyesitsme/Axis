@@ -82,6 +82,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: renameOpenaiConversation
+      tags: [openai]
+      summary: Rename a conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationRenameInput"
+      responses:
+        "200":
+          description: Updated conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenaiConversation"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
     delete:
       operationId: deleteOpenaiConversation
       tags: [openai]
@@ -197,6 +226,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: renameCortexConversation
+      tags: [cortex]
+      summary: Rename a Cortex conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationRenameInput"
+      responses:
+        "200":
+          description: Updated conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CortexConversation"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
     delete:
       operationId: deleteCortexConversation
       tags: [cortex]
@@ -273,6 +331,13 @@ components:
           type: string
       required:
         - error
+    ConversationRenameInput:
+      type: object
+      properties:
+        title:
+          type: string
+      required:
+        - title
     OpenaiConversation:
       type: object
       properties:

@@ -7,6 +7,7 @@
  */
 
 export * from "./apiError";
+export * from "./conversationRenameInput";
 export * from "./cortexConversation";
 export * from "./cortexConversationInput";
 export * from "./cortexConversationWithMessages";

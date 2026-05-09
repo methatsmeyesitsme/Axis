@@ -18,6 +18,7 @@ import type {
 
 import type {
   ApiError,
+  ConversationRenameInput,
   CortexConversation,
   CortexConversationInput,
   CortexConversationWithMessages,
@@ -369,6 +370,94 @@ export function useGetOpenaiConversation<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Rename a conversation
+ */
+export const getRenameOpenaiConversationUrl = (id: number) => {
+  return `/api/openai/conversations/${id}`;
+};
+
+export const renameOpenaiConversation = async (
+  id: number,
+  conversationRenameInput: ConversationRenameInput,
+  options?: RequestInit,
+): Promise<OpenaiConversation> => {
+  return customFetch<OpenaiConversation>(getRenameOpenaiConversationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conversationRenameInput),
+  });
+};
+
+export const getRenameOpenaiConversationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameOpenaiConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof renameOpenaiConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  const mutationKey = ["renameOpenaiConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof renameOpenaiConversation>>,
+    { id: number; data: BodyType<ConversationRenameInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return renameOpenaiConversation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RenameOpenaiConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof renameOpenaiConversation>>
+>;
+export type RenameOpenaiConversationMutationBody =
+  BodyType<ConversationRenameInput>;
+export type RenameOpenaiConversationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Rename a conversation
+ */
+export const useRenameOpenaiConversation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameOpenaiConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof renameOpenaiConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  return useMutation(getRenameOpenaiConversationMutationOptions(options));
+};
 
 /**
  * @summary Delete a conversation
@@ -881,6 +970,94 @@ export function useGetCortexConversation<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Rename a Cortex conversation
+ */
+export const getRenameCortexConversationUrl = (id: number) => {
+  return `/api/cortex/conversations/${id}`;
+};
+
+export const renameCortexConversation = async (
+  id: number,
+  conversationRenameInput: ConversationRenameInput,
+  options?: RequestInit,
+): Promise<CortexConversation> => {
+  return customFetch<CortexConversation>(getRenameCortexConversationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conversationRenameInput),
+  });
+};
+
+export const getRenameCortexConversationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameCortexConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof renameCortexConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  const mutationKey = ["renameCortexConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof renameCortexConversation>>,
+    { id: number; data: BodyType<ConversationRenameInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return renameCortexConversation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RenameCortexConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof renameCortexConversation>>
+>;
+export type RenameCortexConversationMutationBody =
+  BodyType<ConversationRenameInput>;
+export type RenameCortexConversationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Rename a Cortex conversation
+ */
+export const useRenameCortexConversation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameCortexConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof renameCortexConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  return useMutation(getRenameCortexConversationMutationOptions(options));
+};
 
 /**
  * @summary Delete a Cortex conversation

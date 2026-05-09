@@ -61,7 +61,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
       setShowScrollButton(false);
     }
   }, []);
@@ -73,8 +73,8 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   }, []);
 
   useEffect(() => {
-    if (isNearBottom()) scrollToBottom();
-  }, [serverMessages, displayedContent, scrollToBottom, isNearBottom]);
+    if (isStreaming || isThinking || isNearBottom()) scrollToBottom();
+  }, [serverMessages, displayedContent, isStreaming, isThinking, scrollToBottom, isNearBottom]);
 
   useEffect(() => {
     if (!isStreaming) return;

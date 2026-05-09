@@ -13,6 +13,10 @@ export interface ApiError {
   error: string;
 }
 
+export interface ConversationRenameInput {
+  title: string;
+}
+
 export interface OpenaiConversation {
   id: number;
   title: string;
