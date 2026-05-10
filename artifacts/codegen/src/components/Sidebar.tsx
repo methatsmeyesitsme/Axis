@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   useListOpenaiConversations,
   useDeleteOpenaiConversation,
@@ -65,17 +66,26 @@ function ConversationItem({
   onDelete: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const openMenu = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setMenuPos({ top: rect.bottom + 4, left: rect.right - 144 });
+    }
+    setMenuOpen((v) => !v);
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
+    function handleClose(e: MouseEvent) {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target)) setMenuOpen(false);
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    document.addEventListener("mousedown", handleClose);
+    return () => document.removeEventListener("mousedown", handleClose);
   }, [menuOpen]);
 
   return (
@@ -86,7 +96,6 @@ function ConversationItem({
         isActive ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
       }`}
     >
-      {/* Text content — padded right so the absolute button doesn't overlap */}
       <div style={{ paddingRight: 28 }}>
         <div className="flex items-center gap-2">
           <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60" />
@@ -97,94 +106,75 @@ function ConversationItem({
         )}
       </div>
 
-      {/* Three-dot button — absolutely anchored to the right edge */}
-      <div
-        ref={menuRef}
-        style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)" }}
+      <button
+        ref={btnRef}
+        onClick={openMenu}
+        style={{
+          position: "absolute",
+          right: 6,
+          top: "50%",
+          transform: "translateY(-50%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 22,
+          height: 22,
+          borderRadius: 4,
+          border: "none",
+          background: menuOpen ? "rgba(0,0,0,0.08)" : "transparent",
+          cursor: "pointer",
+          padding: 0,
+        }}
+        title="More options"
       >
-        <button
-          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 22,
-            height: 22,
-            borderRadius: 4,
-            border: "none",
-            background: menuOpen ? "rgba(0,0,0,0.08)" : "transparent",
-            cursor: "pointer",
-            padding: 0,
-            transition: "background 0.15s",
-          }}
-          onMouseEnter={(e) => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.06)"; }}
-          onMouseLeave={(e) => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-          title="More options"
-        >
-          <MoreVertical style={{ width: 14, height: 14, color: "#6b7280" }} />
-        </button>
+        <MoreVertical style={{ width: 14, height: 14, color: "#6b7280" }} />
+      </button>
 
-        {menuOpen && (
-          <div
+      {menuOpen && createPortal(
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            zIndex: 99999,
+            width: 144,
+            borderRadius: 8,
+            border: "1px solid #e5e7eb",
+            background: "#ffffff",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.14)",
+            padding: "4px 0",
+          }}
+        >
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onRename(); }}
             style={{
-              position: "absolute",
-              right: 0,
-              top: 28,
-              zIndex: 9999,
-              width: 144,
-              borderRadius: 8,
-              border: "1px solid #e5e7eb",
-              background: "#ffffff",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
-              padding: "4px 0",
+              width: "100%", display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 12px", fontSize: 14, background: "transparent",
+              border: "none", cursor: "pointer", textAlign: "left", color: "#111827",
             }}
-            onClick={(e) => e.stopPropagation()}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
           >
-            <button
-              onClick={() => { setMenuOpen(false); onRename(); }}
-              style={{
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 12px",
-                fontSize: 14,
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                textAlign: "left",
-                color: "#111827",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-            >
-              <Pencil style={{ width: 13, height: 13 }} />
-              Rename
-            </button>
-            <button
-              onClick={() => { setMenuOpen(false); onDelete(); }}
-              style={{
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 12px",
-                fontSize: 14,
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                textAlign: "left",
-                color: "#ef4444",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fef2f2"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-            >
-              <Trash2 style={{ width: 13, height: 13 }} />
-              Delete
-            </button>
-          </div>
-        )}
-      </div>
+            <Pencil style={{ width: 13, height: 13 }} />
+            Rename
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 12px", fontSize: 14, background: "transparent",
+              border: "none", cursor: "pointer", textAlign: "left", color: "#ef4444",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fef2f2"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          >
+            <Trash2 style={{ width: 13, height: 13 }} />
+            Delete
+          </button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
