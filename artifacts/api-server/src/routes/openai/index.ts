@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages, userMemories } from "@workspace/db";
-import { ai } from "@workspace/integrations-gemini-ai";
+import { ai, generateImage } from "@workspace/integrations-gemini-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -168,7 +168,13 @@ CORE BEHAVIOR:
 
 6. If the user's message contains "[POSSIBLE SYNTAX ISSUES DETECTED]", explicitly acknowledge and fix those issues.
 
-7. Always offer a follow-up: suggest what to build next or ask if they want a deeper explanation.`;
+7. Always offer a follow-up: suggest what to build next or ask if they want a deeper explanation.
+
+IMAGE GENERATION: When the user asks you to generate, create, draw, make, or show an image, picture, illustration, photo, or artwork, you MUST include this tag on its own line at the very end of your response:
+[IMAGE_PROMPT: a detailed visual description of the image]
+Do not use ASCII art. Just include the tag — the image will be generated automatically.
+
+FILE GENERATION: When the user asks for a .txt or text file, put the content in a \`\`\`text code block. For CSV data or spreadsheets, use a \`\`\`csv code block. The user can download these files directly from the code block.`;
 
   if (planMode) {
     systemPrompt += `
@@ -209,7 +215,26 @@ PLAN MODE IS ACTIVE — Help the user plan, not implement. Use pseudocode only. 
     }
 
     if (!res.writableEnded) {
-      await db.insert(messages).values({ conversationId: id, role: "assistant", content: fullResponse });
+      // Detect and process image generation request
+      const imagePromptMatch = fullResponse.match(/\[IMAGE_PROMPT:\s*([\s\S]+?)\]\s*$/i);
+      let savedContent = fullResponse;
+
+      if (imagePromptMatch) {
+        const imagePrompt = imagePromptMatch[1].trim();
+        // Strip the tag from what's stored and shown as text
+        savedContent = fullResponse.slice(0, imagePromptMatch.index).trimEnd();
+        try {
+          const imgResult = await generateImage(imagePrompt);
+          // Append image tag to saved content
+          savedContent += `\n[IMAGE:${imgResult.mimeType}|${imgResult.b64_json}]`;
+          // Send image data to frontend
+          res.write(`data: ${JSON.stringify({ imageData: { b64: imgResult.b64_json, mimeType: imgResult.mimeType } })}\n\n`);
+        } catch (imgErr) {
+          req.log.error({ imgErr }, "[Axis] Image generation failed");
+        }
+      }
+
+      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
 
       const isFirstMessage = history.length === 0;
       if (isFirstMessage) {

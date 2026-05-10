@@ -9,6 +9,82 @@ interface MessageBubbleProps {
   content: string;
   isStreaming?: boolean;
   isThinking?: boolean;
+  streamingImages?: Array<{ b64: string; mimeType: string }>;
+}
+
+interface ParsedContent {
+  text: string;
+  images: Array<{ b64: string; mimeType: string }>;
+}
+
+function parseMessageContent(raw: string): ParsedContent {
+  const images: Array<{ b64: string; mimeType: string }> = [];
+  const text = raw
+    .replace(/\[IMAGE:([^|]+)\|([^\]]+)\]/g, (_, mimeType: string, b64: string) => {
+      images.push({ mimeType, b64 });
+      return "";
+    })
+    .replace(/\[IMAGE_PROMPT:[^\]]*\]/gi, "")
+    .trimEnd();
+  return { text, images };
+}
+
+function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
+  const [copied, setCopied] = useState(false);
+  const dataUrl = `data:${mimeType};base64,${b64}`;
+  const ext = mimeType.split("/")[1] ?? "png";
+
+  const handleCopy = async () => {
+    try {
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [mimeType]: blob })]);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      await navigator.clipboard.writeText(dataUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleDownload = () => {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `codegen-image.${ext}`;
+    a.click();
+  };
+
+  return (
+    <div className="relative inline-block my-3 rounded-xl overflow-hidden shadow-md group">
+      <img
+        src={dataUrl}
+        alt="AI generated"
+        className="block max-w-full rounded-xl"
+        style={{ maxWidth: 480 }}
+      />
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleCopy}
+          title="Copy image"
+          className="h-8 w-8 bg-black/50 hover:bg-black/70 text-white border-0 rounded-lg backdrop-blur-sm"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleDownload}
+          title="Download image"
+          className="h-8 w-8 bg-black/50 hover:bg-black/70 text-white border-0 rounded-lg backdrop-blur-sm"
+        >
+          <Download className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
@@ -25,11 +101,17 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
       javascript: "js", typescript: "ts", python: "py", java: "java",
       cpp: "cpp", csharp: "cs", go: "go", rust: "rs", php: "php",
       ruby: "rb", swift: "swift", kotlin: "kt", dart: "dart", lua: "lua",
-      luau: "luau", sql: "sql", bash: "sh", shell: "sh", r: "r", html: "html",
-      css: "css",
+      luau: "luau", sql: "sql", bash: "sh", shell: "sh", r: "r",
+      html: "html", css: "css", json: "json", xml: "xml", yaml: "yaml",
+      yml: "yml", markdown: "md", md: "md", toml: "toml", csv: "csv",
+      text: "txt", txt: "txt", plaintext: "txt", plain: "txt",
+      tsx: "tsx", jsx: "jsx", scss: "scss", sass: "sass", less: "less",
+      graphql: "graphql", dockerfile: "dockerfile", makefile: "makefile",
     };
-    const ext = extMap[language?.toLowerCase()] ?? "txt";
-    const blob = new Blob([code], { type: "text/plain" });
+    const lang = language?.toLowerCase() ?? "";
+    const ext = extMap[lang] ?? "txt";
+    const mimeType = lang === "csv" ? "text/csv" : lang === "json" ? "application/json" : "text/plain";
+    const blob = new Blob([code], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -50,7 +132,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
             size="icon"
             className="h-7 w-7 text-gray-400 hover:text-white hover:bg-white/10"
             onClick={handleDownload}
-            title="Download"
+            title="Download file"
           >
             <Download className="w-3.5 h-3.5" />
           </Button>
@@ -150,8 +232,10 @@ function renderContent(text: string) {
   });
 }
 
-export default function MessageBubble({ role, content, isStreaming, isThinking }: MessageBubbleProps) {
+export default function MessageBubble({ role, content, isStreaming, isThinking, streamingImages }: MessageBubbleProps) {
   const isUser = role === "user";
+  const { text, images: parsedImages } = parseMessageContent(content);
+  const allImages = parsedImages.length > 0 ? parsedImages : (streamingImages ?? []);
 
   return (
     <div className={`flex gap-3 w-full ${isUser ? "justify-end" : "justify-start"}`}>
@@ -173,8 +257,11 @@ export default function MessageBubble({ role, content, isStreaming, isThinking }
             <ThinkingIndicator />
           ) : (
             <>
-              {renderContent(content)}
-              {isStreaming && (
+              {renderContent(text)}
+              {allImages.map((img, i) => (
+                <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
+              ))}
+              {isStreaming && allImages.length === 0 && (
                 <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
               )}
             </>

@@ -35,6 +35,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [streamingImages, setStreamingImages] = useState<Array<{ b64: string; mimeType: string }>>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -167,6 +168,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     streamDoneRef.current = false;
     finalizeTargetRef.current = targetId;
     setDisplayedContent("");
+    setStreamingImages([]);
     setIsThinking(true);
     setIsStreaming(false);
 
@@ -205,6 +207,10 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
             const data = JSON.parse(trimmed.slice(6));
             if (data.content) {
               charQueueRef.current += data.content as string;
+            }
+            if (data.imageData) {
+              const { b64, mimeType } = data.imageData as { b64: string; mimeType: string };
+              setStreamingImages((prev) => [...prev, { b64, mimeType }]);
             }
             if (data.error) {
               charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
@@ -347,7 +353,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
               <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
             ))}
             {(isThinking || isStreaming) && (
-              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} />
+              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} />
             )}
           </div>
         </div>
