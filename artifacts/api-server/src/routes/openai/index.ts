@@ -77,12 +77,14 @@ async function generateTitle(userMessage: string): Promise<string> {
       model: "gemini-2.5-flash",
       contents: [{
         role: "user",
-        parts: [{ text: `What is the main topic or task in this message? Give a short title (3-5 words). Reply with ONLY the title, no punctuation at end.\n\nMessage: "${userMessage.slice(0, 400)}"` }],
+        parts: [{
+          text: `Create a short, specific title (2-5 words) for a chat that starts with this message. Rules: be specific about the actual topic (e.g. "React useState Hook Bug", "Python CSV Parser", "Sort Algorithm Comparison"), use Title Case, no quotes, no punctuation at the end. Reply with ONLY the title.\n\nMessage: "${userMessage.slice(0, 500)}"`,
+        }],
       }],
-      config: { maxOutputTokens: 20 },
+      config: { maxOutputTokens: 25, temperature: 0.3 },
     });
-    const candidate = titleResponse.text?.trim().replace(/["'.!?]$/g, "");
-    if (candidate && candidate.length > 0 && candidate.length < 80) return candidate;
+    const candidate = titleResponse.text?.trim().replace(/^["']|["'.,!?]$/g, "");
+    if (candidate && candidate.length > 1 && candidate.length < 80) return candidate;
   } catch { /* fall through */ }
   return "New Chat";
 }
@@ -169,7 +171,12 @@ router.post("/conversations/:id/messages", async (req, res) => {
   const userId = req.session?.userId ?? null;
   const memoryBlock = userId ? await loadMemories(userId) : "";
 
-  let systemPrompt = `You are Axis, an expert AI programming assistant created by CodeGen, specializing in ${conv.language}.
+  const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+  const timeUtc = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: true });
+
+  let systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.
+
+You are Axis, an expert AI programming assistant created by CodeGen, specializing in ${conv.language}.
 
 CORE IDENTITY:
 - You are Axis — brilliant, precise, and friendly. You make complex code feel approachable.

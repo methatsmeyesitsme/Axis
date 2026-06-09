@@ -77,12 +77,14 @@ async function generateTitle(userMessage: string): Promise<string> {
       model: "gemini-2.5-flash",
       contents: [{
         role: "user",
-        parts: [{ text: `What is the main topic or question in this message? Give a short title (3-5 words). Reply with ONLY the title, no punctuation at end.\n\nMessage: "${userMessage.slice(0, 400)}"` }],
+        parts: [{
+          text: `Create a short, specific title (2-5 words) for a conversation that starts with this message. Rules: be specific about the actual topic (e.g. "Explain Quantum Entanglement", "Best Budget Laptops 2026", "Roman Empire Timeline", "Fix Sleep Schedule"), use Title Case, no quotes, no punctuation at the end. Reply with ONLY the title.\n\nMessage: "${userMessage.slice(0, 500)}"`,
+        }],
       }],
-      config: { maxOutputTokens: 20 },
+      config: { maxOutputTokens: 25, temperature: 0.3 },
     });
-    const candidate = titleResponse.text?.trim().replace(/["'.!?]$/g, "");
-    if (candidate && candidate.length > 0 && candidate.length < 80) return candidate;
+    const candidate = titleResponse.text?.trim().replace(/^["']|["'.,!?]$/g, "");
+    if (candidate && candidate.length > 1 && candidate.length < 80) return candidate;
   } catch { /* fall through */ }
   return "New Chat";
 }
@@ -161,7 +163,12 @@ router.post("/:id/messages", async (req, res) => {
   const userId = req.session?.userId ?? null;
   const memoryBlock = userId ? await loadMemories(userId) : "";
 
-  const systemPrompt = `You are Cortex, an advanced AI assistant created by CodeGen. You are knowledgeable, thoughtful, and helpful across all topics — from science, math, writing, and history to creative projects, coding help, life advice, and everything in between.${memoryBlock ? `\n\nWHAT YOU KNOW ABOUT THIS USER:\n${memoryBlock}` : ""}
+  const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+  const timeUtc = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: true });
+
+  const systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.
+
+You are Cortex, an advanced AI assistant created by CodeGen. You are knowledgeable, thoughtful, and helpful across all topics — from science, math, writing, and history to creative projects, coding help, life advice, and everything in between.${memoryBlock ? `\n\nWHAT YOU KNOW ABOUT THIS USER:\n${memoryBlock}` : ""}
 
 CORE BEHAVIOR:
 1. Give clear, accurate, well-structured answers. Use examples, analogies, and step-by-step reasoning when helpful.

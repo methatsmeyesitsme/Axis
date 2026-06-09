@@ -98,8 +98,10 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const [streamingImages, setStreamingImages] = useState<Array<{ b64: string; mimeType: string }>>([]);
   const [streamingFiles, setStreamingFiles] = useState<Array<{ filename: string; b64: string; mimeType: string }>>([]);
   const [streamingSources, setStreamingSources] = useState<Array<{ url: string; title: string }>>([]);
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const streamingBubbleRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -136,9 +138,19 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     setShowScrollButton(scrollHeight - scrollTop - clientHeight > 120);
   }, []);
 
+  // Scroll to top of the streaming bubble the moment it appears
   useEffect(() => {
-    if (isStreaming || isThinking || isNearBottom()) scrollToBottom();
-  }, [serverMessages, displayedContent, isStreaming, isThinking, scrollToBottom, isNearBottom]);
+    if (isThinking && streamingBubbleRef.current) {
+      setTimeout(() => {
+        streamingBubbleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 40);
+    }
+  }, [isThinking]);
+
+  // Auto-scroll to bottom only for new server messages when near bottom (not during streaming)
+  useEffect(() => {
+    if (!isStreaming && !isThinking && isNearBottom()) scrollToBottom();
+  }, [serverMessages, isStreaming, isThinking, scrollToBottom, isNearBottom]);
 
   // Typewriter interval — runs while isStreaming, drains charQueue, finalizes when done
   useEffect(() => {
@@ -156,6 +168,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         streamDoneRef.current = false;
         const tid = finalizeTargetRef.current;
         setIsStreaming(false);
+        setOptimisticUserMessage(null);
         if (tid) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
@@ -220,6 +233,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     setWarning(syntaxWarning);
 
     let targetId = conversationId;
+    setOptimisticUserMessage(input.trim() || (attachments.length > 0 ? `[${attachments.length} file${attachments.length > 1 ? "s" : ""} attached]` : ""));
     setInput("");
     setAttachments([]);
 
@@ -460,8 +474,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             {serverMessages.map((msg) => (
               <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
             ))}
+            {optimisticUserMessage && (
+              <MessageBubble role="user" content={optimisticUserMessage} />
+            )}
             {(isThinking || isStreaming) && (
-              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} streamingFiles={streamingFiles} sources={streamingSources.length > 0 ? streamingSources : undefined} />
+              <div ref={streamingBubbleRef}>
+                <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} streamingFiles={streamingFiles} sources={streamingSources.length > 0 ? streamingSources : undefined} />
+              </div>
             )}
           </div>
         </div>
