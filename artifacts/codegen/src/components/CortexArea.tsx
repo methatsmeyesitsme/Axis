@@ -36,6 +36,8 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [streamingImages, setStreamingImages] = useState<Array<{ b64: string; mimeType: string }>>([]);
+  const [streamingFiles, setStreamingFiles] = useState<Array<{ filename: string; b64: string; mimeType: string }>>([]);
+  const [streamingSources, setStreamingSources] = useState<Array<{ url: string; title: string }>>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -169,6 +171,8 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     finalizeTargetRef.current = targetId;
     setDisplayedContent("");
     setStreamingImages([]);
+    setStreamingFiles([]);
+    setStreamingSources([]);
     setIsThinking(true);
     setIsStreaming(false);
 
@@ -211,6 +215,13 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
             if (data.imageData) {
               const { b64, mimeType } = data.imageData as { b64: string; mimeType: string };
               setStreamingImages((prev) => [...prev, { b64, mimeType }]);
+            }
+            if (data.fileData) {
+              const { filename, b64, mimeType } = data.fileData as { filename: string; b64: string; mimeType: string };
+              setStreamingFiles((prev) => [...prev, { filename, b64, mimeType }]);
+            }
+            if (data.sources) {
+              setStreamingSources(data.sources as Array<{ url: string; title: string }>);
             }
             if (data.error) {
               charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
@@ -353,7 +364,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
               <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
             ))}
             {(isThinking || isStreaming) && (
-              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} />
+              <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} streamingFiles={streamingFiles} sources={streamingSources.length > 0 ? streamingSources : undefined} />
             )}
           </div>
         </div>

@@ -5,6 +5,25 @@ import { eq, desc, isNull } from "drizzle-orm";
 
 const router: IRouter = Router();
 
+// ── MIME map ─────────────────────────────────────────────────────────────────
+
+const MIME_MAP: Record<string, string> = {
+  csv: "text/csv",
+  txt: "text/plain",
+  text: "text/plain",
+  json: "application/json",
+  xml: "application/xml",
+  html: "text/html",
+  md: "text/markdown",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  tsv: "text/tab-separated-values",
+};
+
+function getMimeType(ext: string): string {
+  return MIME_MAP[ext.toLowerCase()] ?? "text/plain";
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async function loadMemories(userId: number): Promise<string> {
@@ -50,6 +69,22 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
   } catch {
     // Memory extraction is best-effort
   }
+}
+
+async function generateTitle(userMessage: string): Promise<string> {
+  try {
+    const titleResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{
+        role: "user",
+        parts: [{ text: `What is the main topic or question in this message? Give a short title (3-5 words). Reply with ONLY the title, no punctuation at end.\n\nMessage: "${userMessage.slice(0, 400)}"` }],
+      }],
+      config: { maxOutputTokens: 20 },
+    });
+    const candidate = titleResponse.text?.trim().replace(/["'.!?]$/g, "");
+    if (candidate && candidate.length > 0 && candidate.length < 80) return candidate;
+  } catch { /* fall through */ }
+  return "New Chat";
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -121,7 +156,6 @@ router.post("/:id/messages", async (req, res) => {
   if (!conv || conv.source !== "cortex") { res.status(404).json({ error: "Conversation not found" }); return; }
 
   const history = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
-
   await db.insert(messages).values({ conversationId: id, role: "user", content });
 
   const userId = req.session?.userId ?? null;
@@ -139,16 +173,28 @@ CORE BEHAVIOR:
 7. For math and logic problems, show your work step-by-step.
 8. Be concise when the answer is simple; go deeper when the question requires it.
 
-IMAGE GENERATION: When the user asks you to generate, create, draw, make, or show an image, picture, illustration, photo, or artwork, you MUST include this tag on its own line at the very end of your response:
+WEB SEARCH: You have access to real-time Google Search. Use it automatically for current prices, news, recent events, product info, stock prices, weather, or any question requiring up-to-date data. Always include the source URL when citing search results.
+
+IMAGE GENERATION: When the user asks you to generate, create, draw, make, or show an image, picture, illustration, photo, or artwork, include this tag at the very end of your response on its own line:
 [IMAGE_PROMPT: a detailed visual description of the image]
-Do not use ASCII art. Just include the tag — the image will be generated automatically.
+The image will be generated automatically. Do not use ASCII art.
 
-FILE GENERATION: When the user asks for a .txt or text file, put the content in a \`\`\`text code block. For CSV data or spreadsheets, use a \`\`\`csv code block. The user can download these files directly from the code block.`;
+FILE GENERATION: When the user asks for a downloadable file (CSV, spreadsheet, text file, data file, etc.), use this exact format — the marker on one line, then immediately the code block:
+[FILE: filename.ext]
+\`\`\`ext
+file content here
+\`\`\`
+Use the correct file extension (.csv for spreadsheets, .txt for text, .json for JSON, etc.). The user will get a direct download button.`;
 
+  // Strip huge embedded data from history so Gemini context stays manageable
   const chatMessages = [
     ...history.map((m) => ({
       role: m.role === "assistant" ? "model" : ("user" as "model" | "user"),
-      parts: [{ text: m.content }],
+      parts: [{
+        text: m.content
+          .replace(/\[IMAGE:[^\]]*\]/g, "[image was generated here]")
+          .replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]"),
+      }],
     })),
     { role: "user" as const, parts: [{ text: content }] },
   ];
@@ -165,8 +211,14 @@ FILE GENERATION: When the user asks for a .txt or text file, put the content in 
     const stream = await ai.models.generateContentStream({
       model: "gemini-2.5-flash",
       contents: chatMessages,
-      config: { maxOutputTokens: 8192, systemInstruction: systemPrompt },
+      config: {
+        maxOutputTokens: 8192,
+        systemInstruction: systemPrompt,
+        tools: [{ googleSearch: {} }],
+      },
     });
+
+    let lastGroundingChunks: Array<{ web?: { uri: string; title?: string } }> = [];
 
     for await (const chunk of stream) {
       if (res.writableEnded) break;
@@ -175,51 +227,70 @@ FILE GENERATION: When the user asks for a .txt or text file, put the content in 
         fullResponse += text;
         res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
       }
+      const meta = (chunk as unknown as { candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ web?: { uri: string; title?: string } }> } }> })
+        .candidates?.[0]?.groundingMetadata;
+      if (meta?.groundingChunks?.length) lastGroundingChunks = meta.groundingChunks;
     }
 
     if (!res.writableEnded) {
-      // Detect and process image generation request
+      // ── 1. Strip [IMAGE_PROMPT:...] from displayed text ───────────────────
       const imagePromptMatch = fullResponse.match(/\[IMAGE_PROMPT:\s*([\s\S]+?)\]\s*$/i);
-      let savedContent = fullResponse;
+      let savedContent = imagePromptMatch
+        ? fullResponse.slice(0, imagePromptMatch.index).trimEnd()
+        : fullResponse;
 
+      // ── 2. Process [FILE: filename.ext] + code block → fileData events ────
+      const fileBlockRe = /\[FILE:\s*([^\]\n]+)\]\s*\n```[\w-]*\n([\s\S]*?)```/gi;
+      savedContent = savedContent.replace(fileBlockRe, (_, rawName: string, fileContent: string) => {
+        const filename = rawName.trim();
+        const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
+        const mimeType = getMimeType(ext);
+        const b64 = Buffer.from(fileContent).toString("base64");
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
+        }
+        return `[FILEDATA: ${filename}|${mimeType}|${b64}]`;
+      });
+
+      // ── 3. Send grounding sources ─────────────────────────────────────────
+      const sources = lastGroundingChunks
+        .filter((c) => c.web?.uri)
+        .map((c) => ({ url: c.web!.uri, title: c.web!.title ?? c.web!.uri }));
+      if (sources.length > 0 && !res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ sources })}\n\n`);
+      }
+
+      // ── 4. Generate title FIRST (fast, before slow image gen) ─────────────
+      const isFirstMessage = history.length === 0;
+      if (isFirstMessage) {
+        const newTitle = await generateTitle(content);
+        await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
+        }
+      }
+
+      // ── 5. Generate image (slow — title already sent above) ───────────────
       if (imagePromptMatch) {
         const imagePrompt = imagePromptMatch[1].trim();
-        savedContent = fullResponse.slice(0, imagePromptMatch.index).trimEnd();
         try {
           const imgResult = await generateImage(imagePrompt);
           savedContent += `\n[IMAGE:${imgResult.mimeType}|${imgResult.b64_json}]`;
-          res.write(`data: ${JSON.stringify({ imageData: { b64: imgResult.b64_json, mimeType: imgResult.mimeType } })}\n\n`);
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ imageData: { b64: imgResult.b64_json, mimeType: imgResult.mimeType } })}\n\n`);
+          }
         } catch (imgErr) {
           req.log.error({ imgErr }, "[Cortex] Image generation failed");
         }
       }
 
+      // ── 6. Persist assistant message ──────────────────────────────────────
       await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
 
-      const isFirstMessage = history.length === 0;
-      if (isFirstMessage) {
-        let newTitle: string | null = null;
-        try {
-          const titleResponse = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [{
-              role: "user",
-              parts: [{ text: `What is the main topic or question in this message? Give a short title (3-5 words). Reply with ONLY the title, no punctuation at end.\n\nMessage: "${content.slice(0, 400)}"` }],
-            }],
-            config: { maxOutputTokens: 20 },
-          });
-          const candidate = titleResponse.text?.trim().replace(/["'.!?]$/g, "");
-          if (candidate && candidate.length > 0 && candidate.length < 80) newTitle = candidate;
-        } catch { /* fall through */ }
-
-        if (!newTitle) newTitle = "New Chat";
-
-        await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
-        res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
       }
-
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
 
       if (userId) {
         extractAndSaveMemories(userId, content).catch(() => {});
