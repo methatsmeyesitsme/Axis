@@ -33,8 +33,10 @@ function parseMessageContent(raw: string): ParsedContent {
       files.push({ filename: filename.trim(), mimeType: mimeType.trim(), b64: b64.trim() });
       return "";
     })
-    // Strip complete OR partial IMAGE_PROMPT tag (streaming brings it in char-by-char)
+    // Strip complete IMAGE_PROMPT tag
     .replace(/\[IMAGE_PROMPT[\s\S]*$/i, "")
+    // Strip any partial tag being built char-by-char: [, [I, [IM, [IMA… etc.
+    .replace(/\[[A-Z_]*$/i, "")
     .trimEnd();
   return { text, images, files };
 }
@@ -344,10 +346,10 @@ export default function MessageBubble({
       }`}>
         <div className="text-[14.5px]">
           {renderContent(text)}
-          {isGeneratingImage && allImages.length === 0 && <CreatingImagePlaceholder />}
           {allImages.map((img, i) => (
             <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
           ))}
+          {isGeneratingImage && <CreatingImagePlaceholder />}
           {allFiles.map((f, i) => (
             <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
           ))}
