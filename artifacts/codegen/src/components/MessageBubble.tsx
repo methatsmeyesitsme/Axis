@@ -21,10 +21,27 @@ interface ParsedContent {
   files: Array<{ filename: string; b64: string; mimeType: string }>;
 }
 
+function stripImagePromptTag(s: string): string {
+  // Strip complete [IMAGE_PROMPT...] or any text from [IMAGE_PROMPT onwards
+  const idx = s.search(/\[IMAGE_PROMPT/i);
+  if (idx >= 0) return s.slice(0, idx);
+
+  // Strip partial build-up at end of string ONLY if it's a prefix of "IMAGE_PROMPT"
+  // e.g. "[", "[I", "[IM", "[IMA", "[IMAGE_PROMPT" — but NOT "[TODO", "[LIST", etc.
+  const partial = s.match(/\[([A-Z_]*)$/i);
+  if (partial) {
+    const prefix = partial[1].toUpperCase();
+    if ("IMAGE_PROMPT".startsWith(prefix)) {
+      return s.slice(0, partial.index);
+    }
+  }
+  return s;
+}
+
 function parseMessageContent(raw: string): ParsedContent {
   const images: Array<{ b64: string; mimeType: string }> = [];
   const files: Array<{ filename: string; b64: string; mimeType: string }> = [];
-  const text = raw
+  const stripped = raw
     .replace(/\[IMAGE:([^|]+)\|([^\]]+)\]/g, (_, mimeType: string, b64: string) => {
       images.push({ mimeType, b64 });
       return "";
@@ -32,12 +49,8 @@ function parseMessageContent(raw: string): ParsedContent {
     .replace(/\[FILEDATA:\s*([^|]+)\|([^|]+)\|([^\]]+)\]/g, (_, filename: string, mimeType: string, b64: string) => {
       files.push({ filename: filename.trim(), mimeType: mimeType.trim(), b64: b64.trim() });
       return "";
-    })
-    // Strip complete IMAGE_PROMPT tag
-    .replace(/\[IMAGE_PROMPT[\s\S]*$/i, "")
-    // Strip any partial tag being built char-by-char: [, [I, [IM, [IMA… etc.
-    .replace(/\[[A-Z_]*$/i, "")
-    .trimEnd();
+    });
+  const text = stripImagePromptTag(stripped).trimEnd();
   return { text, images, files };
 }
 

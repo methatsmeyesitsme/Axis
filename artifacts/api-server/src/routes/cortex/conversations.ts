@@ -71,7 +71,7 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
   }
 }
 
-async function generateTitle(userMessage: string): Promise<string> {
+async function generateTitle(userMessage: string, log?: { error: (o: unknown, m: string) => void }): Promise<string> {
   try {
     const titleResponse = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -81,11 +81,19 @@ async function generateTitle(userMessage: string): Promise<string> {
           text: `Create a short, specific title (2-5 words) for a conversation that starts with this message. Rules: be specific about the actual topic (e.g. "Explain Quantum Entanglement", "Best Budget Laptops 2026", "Roman Empire Timeline", "Fix Sleep Schedule"), use Title Case, no quotes, no punctuation at the end. Reply with ONLY the title.\n\nMessage: "${userMessage.slice(0, 500)}"`,
         }],
       }],
-      config: { maxOutputTokens: 25, temperature: 0.3 },
+      config: {
+        maxOutputTokens: 50,
+        temperature: 0.3,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     });
-    const candidate = titleResponse.text?.trim().replace(/^["']|["'.,!?]$/g, "");
+    const raw = titleResponse.text?.trim() ?? "";
+    const candidate = raw.replace(/^["']|["'.,!?]$/g, "").trim();
     if (candidate && candidate.length > 1 && candidate.length < 80) return candidate;
-  } catch { /* fall through */ }
+    log?.error({ raw, candidate }, "[Cortex] generateTitle: candidate rejected");
+  } catch (e) {
+    log?.error({ err: e }, "[Cortex] generateTitle: exception");
+  }
   return "New Chat";
 }
 
@@ -241,10 +249,16 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
 
     if (!res.writableEnded) {
       // ── 1. Strip [IMAGE_PROMPT:...] from displayed text ───────────────────
-      const imagePromptMatch = fullResponse.match(/\[IMAGE_PROMPT:\s*([\s\S]+?)\]\s*$/i);
-      let savedContent = imagePromptMatch
-        ? fullResponse.slice(0, imagePromptMatch.index).trimEnd()
+      // Use string search so we don't require a closing ']' (model sometimes omits it)
+      const imagePromptStart = fullResponse.search(/\[IMAGE_PROMPT/i);
+      const hasImagePrompt = imagePromptStart >= 0;
+      let savedContent = hasImagePrompt
+        ? fullResponse.slice(0, imagePromptStart).trimEnd()
         : fullResponse;
+      // Extract the prompt text (with or without closing bracket)
+      const imagePromptText = hasImagePrompt
+        ? (fullResponse.slice(imagePromptStart).match(/\[IMAGE_PROMPT:\s*([\s\S]+?)(?:\]|$)/i)?.[1]?.trim() ?? null)
+        : null;
 
       // ── 2. Process [FILE: filename.ext] + code block → fileData events ────
       const fileBlockRe = /\[FILE:\s*([^\]\n]+)\]\s*\n```[\w-]*\n([\s\S]*?)```/gi;
@@ -270,7 +284,8 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
       // ── 4. Generate title FIRST (fast, before slow image gen) ─────────────
       const isFirstMessage = history.length === 0;
       if (isFirstMessage) {
-        const newTitle = await generateTitle(content);
+        const newTitle = await generateTitle(content, req.log);
+        req.log.info({ newTitle }, "[Cortex] title generated");
         await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
         if (!res.writableEnded) {
           res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
@@ -278,13 +293,12 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
       }
 
       // ── 5. Generate image (slow — title already sent above) ───────────────
-      if (imagePromptMatch) {
-        const imagePrompt = imagePromptMatch[1].trim();
+      if (hasImagePrompt && imagePromptText) {
         try {
           if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ generatingImage: true })}\n\n`);
           }
-          const imgResult = await generateImage(imagePrompt);
+          const imgResult = await generateImage(imagePromptText);
           savedContent += `\n[IMAGE:${imgResult.mimeType}|${imgResult.b64_json}]`;
           if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ imageData: { b64: imgResult.b64_json, mimeType: imgResult.mimeType } })}\n\n`);

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { flushSync } from "react-dom";
 import {
   useGetOpenaiConversation,
   useCreateOpenaiConversation,
@@ -202,10 +203,23 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     };
   }, [isStreaming, queryClient]);
 
-  // Title update
+  // Title update — write directly to cache so the sidebar updates immediately,
+  // without waiting for a network refetch (which can 304 if ETag matches)
   useEffect(() => {
     if (pendingTitle) {
       const tid = finalizeTargetRef.current ?? conversationId;
+      queryClient.setQueryData(
+        getListOpenaiConversationsQueryKey(),
+        (old: Array<{ id: number; title: string; [key: string]: unknown }> | undefined) =>
+          old?.map((c) => (c.id === tid ? { ...c, title: pendingTitle } : c)),
+      );
+      if (tid) {
+        queryClient.setQueryData(
+          getGetOpenaiConversationQueryKey(tid),
+          (old: { title: string; [key: string]: unknown } | undefined) =>
+            old ? { ...old, title: pendingTitle } : old,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
       if (tid) queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(tid) });
       setPendingTitle(null);
@@ -325,7 +339,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
               charQueueRef.current += data.content as string;
             }
             if (data.generatingImage) {
-              setIsGeneratingImage(true);
+              // flushSync forces a render before imageData can arrive in the same batch
+              flushSync(() => setIsGeneratingImage(true));
             }
             if (data.imageData) {
               setIsGeneratingImage(false);
