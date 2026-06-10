@@ -3,15 +3,13 @@ import { Check, Copy, Download, User, FileText, FileSpreadsheet, FileJson, File,
 import { Button } from "@/components/ui/button";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
-import aiLogo from "/ai-logo.png";
+import { AIAvatar } from "./AIStatusLabel";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
-  isThinking?: boolean;
   isGeneratingImage?: boolean;
-  isSearching?: boolean;
   streamingImages?: Array<{ b64: string; mimeType: string }>;
   streamingFiles?: Array<{ filename: string; b64: string; mimeType: string }>;
   sources?: Array<{ url: string; title: string }>;
@@ -35,28 +33,10 @@ function parseMessageContent(raw: string): ParsedContent {
       files.push({ filename: filename.trim(), mimeType: mimeType.trim(), b64: b64.trim() });
       return "";
     })
-    .replace(/\[IMAGE_PROMPT:[^\]]*\]/gi, "")
+    // Strip complete OR partial IMAGE_PROMPT tag (streaming brings it in char-by-char)
+    .replace(/\[IMAGE_PROMPT[\s\S]*$/i, "")
     .trimEnd();
   return { text, images, files };
-}
-
-function ShimmerText({ text }: { text: string }) {
-  return (
-    <span
-      className="text-sm font-medium select-none"
-      style={{
-        background: "linear-gradient(90deg, #c0c8d4 0%, #c0c8d4 20%, #5a6472 45%, #5a6472 55%, #c0c8d4 80%, #c0c8d4 100%)",
-        backgroundSize: "250% 100%",
-        WebkitBackgroundClip: "text",
-        WebkitTextFillColor: "transparent",
-        backgroundClip: "text",
-        animation: "shimmer-sweep 2.4s ease-in-out infinite",
-        display: "inline-block",
-      }}
-    >
-      {text}
-    </span>
-  );
 }
 
 function getFileIcon(ext: string) {
@@ -68,15 +48,12 @@ function getFileIcon(ext: string) {
 
 function FileDownloadCard({ filename, b64, mimeType }: { filename: string; b64: string; mimeType: string }) {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
-
   const handleDownload = () => {
-    const dataUrl = `data:${mimeType};base64,${b64}`;
     const a = document.createElement("a");
-    a.href = dataUrl;
+    a.href = `data:${mimeType};base64,${b64}`;
     a.download = filename;
     a.click();
   };
-
   return (
     <div className="my-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-muted/60 shadow-sm transition-all hover:shadow-md">
       {getFileIcon(ext)}
@@ -146,12 +123,10 @@ function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
 function CreatingImagePlaceholder() {
   return (
     <div
-      className="my-3 rounded-2xl bg-muted/70 border border-border flex flex-col justify-center"
-      style={{ width: 280, height: 90, animation: "shimmer-pulse 1.8s ease-in-out infinite" }}
+      className="my-3 rounded-2xl bg-muted/70 border border-border flex items-start p-4"
+      style={{ width: 130, height: 130, animation: "shimmer-pulse 1.8s ease-in-out infinite" }}
     >
-      <div className="px-4 py-3">
-        <ShimmerText text="Creating" />
-      </div>
+      <span className="text-sm font-medium shimmer-text">Creating</span>
     </div>
   );
 }
@@ -224,7 +199,7 @@ function SourcesList({ sources }: { sources: Array<{ url: string; title: string 
     <div className="mt-3 pt-3 border-t border-border/60">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors group"
+        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
       >
         <Globe className="w-3.5 h-3.5 shrink-0" />
         <span>{sources.length} source{sources.length !== 1 ? "s" : ""}</span>
@@ -274,11 +249,11 @@ function renderContent(text: string): React.ReactNode[] {
         const filename = pendingFilename;
         pendingFilename = null;
         const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
-        const mimeType: Record<string, string> = {
+        const mimeTypeMap: Record<string, string> = {
           csv: "text/csv", txt: "text/plain", text: "text/plain",
           json: "application/json", xml: "application/xml",
         };
-        const mime = mimeType[ext] ?? "text/plain";
+        const mime = mimeTypeMap[ext] ?? "text/plain";
         const handleDownload = () => {
           const blob = new Blob([code.trimEnd()], { type: mime });
           const url = URL.createObjectURL(blob);
@@ -339,7 +314,7 @@ function renderContent(text: string): React.ReactNode[] {
 }
 
 export default function MessageBubble({
-  role, content, isStreaming, isThinking, isGeneratingImage, isSearching,
+  role, content, isStreaming, isGeneratingImage,
   streamingImages, streamingFiles, sources,
 }: MessageBubbleProps) {
   const isUser = role === "user";
@@ -347,12 +322,6 @@ export default function MessageBubble({
 
   const allImages = parsedImages.length > 0 ? parsedImages : (streamingImages ?? []);
   const allFiles = parsedFiles.length > 0 ? parsedFiles : (streamingFiles ?? []);
-
-  const statusLabel = isThinking
-    ? "Thinking"
-    : isSearching
-    ? "Searching the web"
-    : null;
 
   return (
     <div
@@ -362,46 +331,30 @@ export default function MessageBubble({
       <style>{`
         @keyframes fadeSlideIn {
           from { opacity: 0; transform: translateY(6px); }
-          to { opacity: 1; transform: translateY(0); }
+          to   { opacity: 1; transform: translateY(0); }
         }
       `}</style>
 
-      {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-muted/60 border border-border/60 flex items-center justify-center shrink-0 mt-1 overflow-hidden shadow-sm">
-          <img src={aiLogo} alt="AI" className="w-6 h-6 object-contain" />
-        </div>
-      )}
+      {!isUser && <AIAvatar />}
 
-      <div className="flex flex-col gap-1.5 max-w-[85%]">
-        {!isUser && statusLabel && (
-          <div className="pl-1">
-            <ShimmerText text={statusLabel} />
-          </div>
-        )}
-
-        <div className={`rounded-2xl px-5 py-4 ${
-          isUser
-            ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
-            : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
-        }`}>
-          <div className="text-[14.5px]">
-            {isThinking && !content ? null : (
-              <>
-                {renderContent(text)}
-                {isGeneratingImage && allImages.length === 0 && <CreatingImagePlaceholder />}
-                {allImages.map((img, i) => (
-                  <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
-                ))}
-                {allFiles.map((f, i) => (
-                  <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
-                ))}
-                {sources && <SourcesList sources={sources} />}
-                {isStreaming && allImages.length === 0 && !isGeneratingImage && (
-                  <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
-                )}
-              </>
-            )}
-          </div>
+      <div className={`max-w-[85%] rounded-2xl px-5 py-4 ${
+        isUser
+          ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
+          : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
+      }`}>
+        <div className="text-[14.5px]">
+          {renderContent(text)}
+          {isGeneratingImage && allImages.length === 0 && <CreatingImagePlaceholder />}
+          {allImages.map((img, i) => (
+            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
+          ))}
+          {allFiles.map((f, i) => (
+            <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
+          ))}
+          {sources && <SourcesList sources={sources} />}
+          {isStreaming && allImages.length === 0 && !isGeneratingImage && (
+            <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
+          )}
         </div>
       </div>
 

@@ -11,9 +11,10 @@ import LanguageSelector from "./LanguageSelector";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown } from "lucide-react";
+import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown, Globe } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
+import { AIThinkingRow } from "./AIStatusLabel";
 
 interface ChatAreaProps {
   conversationId: number | null;
@@ -377,8 +378,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   // ── Fix: don't show optimistic if server already has the user message ──────
   const showOptimistic = optimisticUserMessage && serverMessages.length <= optimisticBaseline;
-  const isSearching = streamingSources.length > 0 && isStreaming;
-  const showStreamingBubble = isThinking || isStreaming || displayedContent.length > 0;
+  const showBubble = isStreaming || displayedContent.length > 0;
 
   const inputBar = (placeholder: string) => (
     <div className="p-4 border-t bg-background shadow-sm shrink-0">
@@ -516,15 +516,20 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             {showOptimistic && (
               <MessageBubble role="user" content={optimisticUserMessage!} />
             )}
-            {showStreamingBubble && (
-              <div ref={streamingBubbleRef}>
+            {isThinking && <AIThinkingRow text="Thinking" />}
+            {showBubble && (
+              <div ref={streamingBubbleRef} className="flex flex-col gap-0.5">
+                {streamingSources.length > 0 && (
+                  <div className="flex items-center gap-1.5 pl-11 mb-0.5">
+                    <Globe className="w-3 h-3 text-muted-foreground/70" />
+                    <span className="text-xs text-muted-foreground/70">Searched the web</span>
+                  </div>
+                )}
                 <MessageBubble
                   role="assistant"
                   content={displayedContent}
                   isStreaming={isStreaming}
-                  isThinking={isThinking}
                   isGeneratingImage={isGeneratingImage}
-                  isSearching={isSearching}
                   streamingImages={streamingImages}
                   streamingFiles={streamingFiles}
                   sources={streamingSources.length > 0 ? streamingSources : undefined}

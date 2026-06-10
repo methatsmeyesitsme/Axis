@@ -183,6 +183,16 @@
   50% { opacity: 1; }
 }
 
+.shimmer-text {
+  background: linear-gradient(90deg, #c0c8d4 0%, #c0c8d4 20%, #5a6472 45%, #5a6472 55%, #c0c8d4 80%, #c0c8d4 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer-sweep 2.4s ease-in-out infinite;
+  display: inline-block;
+}
+
 @layer base {
   * {
     @apply border-border;
