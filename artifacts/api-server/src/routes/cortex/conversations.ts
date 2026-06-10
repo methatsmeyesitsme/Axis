@@ -281,6 +281,9 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
       if (imagePromptMatch) {
         const imagePrompt = imagePromptMatch[1].trim();
         try {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ generatingImage: true })}\n\n`);
+          }
           const imgResult = await generateImage(imagePrompt);
           savedContent += `\n[IMAGE:${imgResult.mimeType}|${imgResult.b64_json}]`;
           if (!res.writableEnded) {

@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { Check, Copy, Download, User, Bot, FileText, FileSpreadsheet, FileJson, File } from "lucide-react";
+import { Check, Copy, Download, User, FileText, FileSpreadsheet, FileJson, File, ChevronDown, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import aiLogo from "/ai-logo.png";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
   isThinking?: boolean;
+  isGeneratingImage?: boolean;
+  isSearching?: boolean;
   streamingImages?: Array<{ b64: string; mimeType: string }>;
   streamingFiles?: Array<{ filename: string; b64: string; mimeType: string }>;
   sources?: Array<{ url: string; title: string }>;
@@ -37,6 +40,25 @@ function parseMessageContent(raw: string): ParsedContent {
   return { text, images, files };
 }
 
+function ShimmerText({ text }: { text: string }) {
+  return (
+    <span
+      className="text-sm font-medium select-none"
+      style={{
+        background: "linear-gradient(90deg, #c0c8d4 0%, #c0c8d4 20%, #5a6472 45%, #5a6472 55%, #c0c8d4 80%, #c0c8d4 100%)",
+        backgroundSize: "250% 100%",
+        WebkitBackgroundClip: "text",
+        WebkitTextFillColor: "transparent",
+        backgroundClip: "text",
+        animation: "shimmer-sweep 2.4s ease-in-out infinite",
+        display: "inline-block",
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
 function getFileIcon(ext: string) {
   if (["csv", "tsv"].includes(ext)) return <FileSpreadsheet className="w-5 h-5 text-green-600" />;
   if (["json", "xml", "yaml", "yml"].includes(ext)) return <FileJson className="w-5 h-5 text-blue-600" />;
@@ -56,13 +78,13 @@ function FileDownloadCard({ filename, b64, mimeType }: { filename: string; b64: 
   };
 
   return (
-    <div className="my-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-muted/60 shadow-sm">
+    <div className="my-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-muted/60 shadow-sm transition-all hover:shadow-md">
       {getFileIcon(ext)}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold truncate text-foreground">{filename}</p>
         <p className="text-xs text-muted-foreground uppercase tracking-wide">{ext} file</p>
       </div>
-      <Button size="sm" variant="outline" onClick={handleDownload} className="shrink-0 gap-1.5 text-xs font-medium">
+      <Button size="sm" variant="outline" onClick={handleDownload} className="shrink-0 gap-1.5 text-xs font-medium transition-all hover:scale-105">
         <Download className="w-3.5 h-3.5" />
         Download
       </Button>
@@ -72,6 +94,7 @@ function FileDownloadCard({ filename, b64, mimeType }: { filename: string; b64: 
 
 function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
   const [copied, setCopied] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const dataUrl = `data:${mimeType};base64,${b64}`;
   const ext = mimeType.split("/")[1] ?? "png";
 
@@ -95,9 +118,18 @@ function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
   };
 
   return (
-    <div className="relative inline-block my-3 rounded-xl overflow-hidden shadow-md group">
-      <img src={dataUrl} alt="AI generated" className="block max-w-full rounded-xl" style={{ maxWidth: 480 }} />
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div
+      className="relative inline-block my-3 rounded-xl overflow-hidden shadow-md group"
+      style={{ opacity: loaded ? 1 : 0, transition: "opacity 0.4s ease" }}
+    >
+      <img
+        src={dataUrl}
+        alt="AI generated"
+        className="block max-w-full rounded-xl"
+        style={{ maxWidth: 480 }}
+        onLoad={() => setLoaded(true)}
+      />
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
         <Button variant="ghost" size="icon" onClick={handleCopy} title="Copy image"
           className="h-8 w-8 bg-black/50 hover:bg-black/70 text-white border-0 rounded-lg backdrop-blur-sm">
           {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -106,6 +138,19 @@ function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
           className="h-8 w-8 bg-black/50 hover:bg-black/70 text-white border-0 rounded-lg backdrop-blur-sm">
           <Download className="w-3.5 h-3.5" />
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function CreatingImagePlaceholder() {
+  return (
+    <div
+      className="my-3 rounded-2xl bg-muted/70 border border-border flex flex-col justify-center"
+      style={{ width: 280, height: 90, animation: "shimmer-pulse 1.8s ease-in-out infinite" }}
+    >
+      <div className="px-4 py-3">
+        <ShimmerText text="Creating" />
       </div>
     </div>
   );
@@ -147,21 +192,21 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   const displayLang = language || "code";
 
   return (
-    <div className="my-4 rounded-xl border border-gray-700 shadow-md">
-      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2 bg-[#1a1f2e] border-b border-gray-700 rounded-t-xl">
+    <div className="my-4 rounded-xl border border-gray-700 shadow-md overflow-hidden">
+      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2 bg-[#1a1f2e] border-b border-gray-700">
         <span className="text-xs font-mono text-gray-400">{displayLang}</span>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-white hover:bg-white/10"
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
             onClick={handleDownload} title="Download file">
             <Download className="w-3.5 h-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-white hover:bg-white/10"
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
             onClick={handleCopy} title="Copy">
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           </Button>
         </div>
       </div>
-      <div className="rounded-b-xl overflow-hidden">
+      <div>
         <SyntaxHighlighter language={displayLang} style={atomOneDark}
           customStyle={{ margin: 0, padding: "1rem", fontSize: "0.8125rem", lineHeight: "1.6", background: "#1E293B" }}
           showLineNumbers wrapLongLines={false}>
@@ -172,14 +217,31 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
-function ThinkingIndicator() {
+function SourcesList({ sources }: { sources: Array<{ url: string; title: string }> }) {
+  const [open, setOpen] = useState(false);
+  if (!sources.length) return null;
   return (
-    <div className="flex items-center gap-2 py-1">
-      <span className="text-sm text-muted-foreground italic">Thinking</span>
-      <div className="flex gap-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce [animation-delay:0ms]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce [animation-delay:150ms]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce [animation-delay:300ms]" />
+    <div className="mt-3 pt-3 border-t border-border/60">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors group"
+      >
+        <Globe className="w-3.5 h-3.5 shrink-0" />
+        <span>{sources.length} source{sources.length !== 1 ? "s" : ""}</span>
+        <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      <div
+        className="overflow-hidden transition-all duration-200"
+        style={{ maxHeight: open ? `${sources.length * 28}px` : "0px", opacity: open ? 1 : 0 }}
+      >
+        <div className="mt-2 flex flex-col gap-1">
+          {sources.map((s, i) => (
+            <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-primary hover:underline truncate block max-w-full transition-opacity hover:opacity-80">
+              {s.title || s.url}
+            </a>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -188,7 +250,6 @@ function ThinkingIndicator() {
 function renderContent(text: string): React.ReactNode[] {
   if (!text) return [];
 
-  // Split on code blocks AND [FILE: ...] markers
   const parts = text.split(/(```[\s\S]*?(?:```|$)|\[FILE:\s*[^\]\n]+\])/g);
   const result: React.ReactNode[] = [];
   let pendingFilename: string | null = null;
@@ -196,14 +257,12 @@ function renderContent(text: string): React.ReactNode[] {
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
 
-    // [FILE: filename.ext] marker — remember for next code block
     const fileMarker = part.match(/^\[FILE:\s*([^\]\n]+)\]$/);
     if (fileMarker) {
       pendingFilename = fileMarker[1].trim();
       continue;
     }
 
-    // Code block
     if (part.startsWith("```")) {
       const closed = part.endsWith("```") && part.length > 3;
       const inner = closed ? part.slice(3, -3) : part.slice(3);
@@ -212,7 +271,6 @@ function renderContent(text: string): React.ReactNode[] {
       const code = newlineIdx > -1 ? inner.slice(newlineIdx + 1) : inner;
 
       if (pendingFilename) {
-        // Render as file download card (inline, from streaming text)
         const filename = pendingFilename;
         pendingFilename = null;
         const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
@@ -231,13 +289,13 @@ function renderContent(text: string): React.ReactNode[] {
           URL.revokeObjectURL(url);
         };
         result.push(
-          <div key={i} className="my-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-muted/60 shadow-sm">
+          <div key={i} className="my-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-muted/60 shadow-sm hover:shadow-md transition-all">
             {getFileIcon(ext)}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate text-foreground">{filename}</p>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">{ext} file · ready to download</p>
             </div>
-            <Button size="sm" variant="outline" onClick={handleDownload} className="shrink-0 gap-1.5 text-xs font-medium">
+            <Button size="sm" variant="outline" onClick={handleDownload} className="shrink-0 gap-1.5 text-xs font-medium hover:scale-105 transition-all">
               <Download className="w-3.5 h-3.5" />
               Download
             </Button>
@@ -251,7 +309,6 @@ function renderContent(text: string): React.ReactNode[] {
     }
 
     pendingFilename = null;
-
     if (!part.trim()) continue;
 
     const lines = part.split("\n");
@@ -281,25 +338,9 @@ function renderContent(text: string): React.ReactNode[] {
   return result;
 }
 
-function SourcesList({ sources }: { sources: Array<{ url: string; title: string }> }) {
-  if (!sources.length) return null;
-  return (
-    <div className="mt-3 pt-3 border-t border-border/60">
-      <p className="text-xs font-medium text-muted-foreground mb-1.5">Sources</p>
-      <div className="flex flex-col gap-1">
-        {sources.map((s, i) => (
-          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
-            className="text-xs text-primary hover:underline truncate block max-w-full">
-            {s.title || s.url}
-          </a>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function MessageBubble({
-  role, content, isStreaming, isThinking, streamingImages, streamingFiles, sources,
+  role, content, isStreaming, isThinking, isGeneratingImage, isSearching,
+  streamingImages, streamingFiles, sources,
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const { text, images: parsedImages, files: parsedFiles } = parseMessageContent(content);
@@ -307,37 +348,60 @@ export default function MessageBubble({
   const allImages = parsedImages.length > 0 ? parsedImages : (streamingImages ?? []);
   const allFiles = parsedFiles.length > 0 ? parsedFiles : (streamingFiles ?? []);
 
+  const statusLabel = isThinking
+    ? "Thinking"
+    : isSearching
+    ? "Searching the web"
+    : null;
+
   return (
-    <div className={`flex gap-3 w-full ${isUser ? "justify-end" : "justify-start"}`}>
+    <div
+      className={`flex gap-3 w-full ${isUser ? "justify-end" : "justify-start"}`}
+      style={{ animation: "fadeSlideIn 0.18s ease-out both" }}
+    >
+      <style>{`
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
       {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-1">
-          <Bot className="w-4 h-4 text-primary" />
+        <div className="w-8 h-8 rounded-full bg-muted/60 border border-border/60 flex items-center justify-center shrink-0 mt-1 overflow-hidden shadow-sm">
+          <img src={aiLogo} alt="AI" className="w-6 h-6 object-contain" />
         </div>
       )}
 
-      <div className={`max-w-[85%] rounded-2xl px-5 py-4 ${
-        isUser
-          ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
-          : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
-      }`}>
-        <div className="text-[14.5px]">
-          {isThinking && !content ? (
-            <ThinkingIndicator />
-          ) : (
-            <>
-              {renderContent(text)}
-              {allImages.map((img, i) => (
-                <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
-              ))}
-              {allFiles.map((f, i) => (
-                <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
-              ))}
-              {sources && <SourcesList sources={sources} />}
-              {isStreaming && allImages.length === 0 && (
-                <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
-              )}
-            </>
-          )}
+      <div className="flex flex-col gap-1.5 max-w-[85%]">
+        {!isUser && statusLabel && (
+          <div className="pl-1">
+            <ShimmerText text={statusLabel} />
+          </div>
+        )}
+
+        <div className={`rounded-2xl px-5 py-4 ${
+          isUser
+            ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
+            : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
+        }`}>
+          <div className="text-[14.5px]">
+            {isThinking && !content ? null : (
+              <>
+                {renderContent(text)}
+                {isGeneratingImage && allImages.length === 0 && <CreatingImagePlaceholder />}
+                {allImages.map((img, i) => (
+                  <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
+                ))}
+                {allFiles.map((f, i) => (
+                  <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
+                ))}
+                {sources && <SourcesList sources={sources} />}
+                {isStreaming && allImages.length === 0 && !isGeneratingImage && (
+                  <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 

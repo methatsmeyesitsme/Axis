@@ -90,6 +90,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [planMode, setPlanMode] = useState(false);
@@ -99,6 +100,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const [streamingFiles, setStreamingFiles] = useState<Array<{ filename: string; b64: string; mimeType: string }>>([]);
   const [streamingSources, setStreamingSources] = useState<Array<{ url: string; title: string }>>([]);
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
+  const [optimisticBaseline, setOptimisticBaseline] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingBubbleRef = useRef<HTMLDivElement>(null);
@@ -110,6 +112,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const streamingContentRef = useRef<string>("");
   const streamDoneRef = useRef(false);
   const finalizeTargetRef = useRef<number | null>(null);
+  const streamingJustFinishedRef = useRef(false);
+  const prevMessagesLengthRef = useRef(0);
 
   const { data: conversation } = useGetOpenaiConversation(conversationId!, {
     query: { enabled: !!conversationId, queryKey: getGetOpenaiConversationQueryKey(conversationId!) },
@@ -118,6 +122,21 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     query: { enabled: !!conversationId, queryKey: getListOpenaiMessagesQueryKey(conversationId!) },
   });
   const createMutation = useCreateOpenaiConversation();
+
+  // ── Fix: hide streaming bubble only after server messages arrive ──────────
+  useEffect(() => {
+    if (serverMessages.length > prevMessagesLengthRef.current) {
+      prevMessagesLengthRef.current = serverMessages.length;
+      if (streamingJustFinishedRef.current) {
+        streamingJustFinishedRef.current = false;
+        setDisplayedContent("");
+        setStreamingImages([]);
+        setStreamingFiles([]);
+        setStreamingSources([]);
+        setIsGeneratingImage(false);
+      }
+    }
+  }, [serverMessages]);
 
   const isNearBottom = useCallback(() => {
     if (!scrollRef.current) return true;
@@ -138,7 +157,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     setShowScrollButton(scrollHeight - scrollTop - clientHeight > 120);
   }, []);
 
-  // Scroll to top of the streaming bubble the moment it appears
+  // Scroll to top of streaming bubble when it appears
   useEffect(() => {
     if (isThinking && streamingBubbleRef.current) {
       setTimeout(() => {
@@ -147,12 +166,12 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     }
   }, [isThinking]);
 
-  // Auto-scroll to bottom only for new server messages when near bottom (not during streaming)
+  // Auto-scroll only for new server messages when near bottom (not during streaming)
   useEffect(() => {
     if (!isStreaming && !isThinking && isNearBottom()) scrollToBottom();
   }, [serverMessages, isStreaming, isThinking, scrollToBottom, isNearBottom]);
 
-  // Typewriter interval — runs while isStreaming, drains charQueue, finalizes when done
+  // Typewriter interval
   useEffect(() => {
     if (!isStreaming) return;
 
@@ -162,18 +181,18 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         charQueueRef.current = charQueueRef.current.slice(5);
         setDisplayedContent((prev) => prev + batch);
       } else if (streamDoneRef.current) {
-        // Queue drained and network stream is done — finalize
         clearInterval(displayTimerRef.current!);
         displayTimerRef.current = null;
         streamDoneRef.current = false;
         const tid = finalizeTargetRef.current;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
+        // Signal to keep streaming bubble visible until server messages arrive
+        streamingJustFinishedRef.current = true;
         if (tid) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
-        setTimeout(() => setDisplayedContent(""), 600);
       }
     }, 30);
 
@@ -182,10 +201,12 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     };
   }, [isStreaming, queryClient]);
 
+  // Title update
   useEffect(() => {
     if (pendingTitle) {
+      const tid = finalizeTargetRef.current ?? conversationId;
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
-      if (conversationId) queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(conversationId) });
+      if (tid) queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(tid) });
       setPendingTitle(null);
     }
   }, [pendingTitle, conversationId, queryClient]);
@@ -196,9 +217,14 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     charQueueRef.current = "";
     streamDoneRef.current = false;
     streamingContentRef.current = "";
+    streamingJustFinishedRef.current = false;
     setIsStreaming(false);
     setIsThinking(false);
+    setIsGeneratingImage(false);
     setDisplayedContent("");
+    setStreamingImages([]);
+    setStreamingFiles([]);
+    setStreamingSources([]);
     queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(conversationId!) });
   };
 
@@ -233,7 +259,9 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     setWarning(syntaxWarning);
 
     let targetId = conversationId;
-    setOptimisticUserMessage(input.trim() || (attachments.length > 0 ? `[${attachments.length} file${attachments.length > 1 ? "s" : ""} attached]` : ""));
+    const optimisticText = input.trim() || (attachments.length > 0 ? `[${attachments.length} file${attachments.length > 1 ? "s" : ""} attached]` : "");
+    setOptimisticUserMessage(optimisticText);
+    setOptimisticBaseline(serverMessages.length);
     setInput("");
     setAttachments([]);
 
@@ -244,15 +272,17 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
 
-    // Reset state for new message
     charQueueRef.current = "";
     streamingContentRef.current = "";
     streamDoneRef.current = false;
+    streamingJustFinishedRef.current = false;
     finalizeTargetRef.current = targetId;
+    prevMessagesLengthRef.current = serverMessages.length;
     setDisplayedContent("");
     setStreamingImages([]);
     setStreamingFiles([]);
     setStreamingSources([]);
+    setIsGeneratingImage(false);
     setIsThinking(true);
     setIsStreaming(false);
 
@@ -271,7 +301,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       if (!response.body) throw new Error("No response body");
 
       setIsThinking(false);
-      setIsStreaming(true); // starts the typewriter interval
+      setIsStreaming(true);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -291,9 +321,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             const data = JSON.parse(trimmed.slice(6));
             if (data.content) {
               streamingContentRef.current += data.content as string;
-              charQueueRef.current += data.content as string; // feed typewriter directly
+              charQueueRef.current += data.content as string;
+            }
+            if (data.generatingImage) {
+              setIsGeneratingImage(true);
             }
             if (data.imageData) {
+              setIsGeneratingImage(false);
               const { b64, mimeType } = data.imageData as { b64: string; mimeType: string };
               setStreamingImages((prev) => [...prev, { b64, mimeType }]);
             }
@@ -322,12 +356,12 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       abortRef.current = null;
       streamingContentRef.current = "";
       setIsThinking(false);
-      // Signal typewriter to finalize once queue drains
       streamDoneRef.current = true;
-      // If nothing queued at all (e.g. abort), stop immediately
       if (charQueueRef.current.length === 0) {
         streamDoneRef.current = false;
+        streamingJustFinishedRef.current = true;
         setIsStreaming(false);
+        setOptimisticUserMessage(null);
         const tid = finalizeTargetRef.current;
         if (tid) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
@@ -340,6 +374,11 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
+
+  // ── Fix: don't show optimistic if server already has the user message ──────
+  const showOptimistic = optimisticUserMessage && serverMessages.length <= optimisticBaseline;
+  const isSearching = streamingSources.length > 0 && isStreaming;
+  const showStreamingBubble = isThinking || isStreaming || displayedContent.length > 0;
 
   const inputBar = (placeholder: string) => (
     <div className="p-4 border-t bg-background shadow-sm shrink-0">
@@ -372,7 +411,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           </div>
         )}
 
-        <div className="border border-input rounded-2xl bg-card shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
+        <div className="border border-input rounded-2xl bg-card shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all duration-200">
           <Textarea
             ref={inputRef}
             placeholder={placeholder}
@@ -392,7 +431,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
                 accept="image/*,text/*,.js,.ts,.tsx,.jsx,.py,.java,.cpp,.cs,.go,.rs,.php,.rb,.swift,.kt,.dart,.lua,.sql,.sh,.r,.html,.css,.json,.yaml,.yml,.md,.txt"
                 onChange={handleFileUpload}
               />
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted" onClick={() => fileInputRef.current?.click()} title="Attach file or image" type="button">
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" onClick={() => fileInputRef.current?.click()} title="Attach file or image" type="button">
                 <Plus className="w-4 h-4" />
               </Button>
             </div>
@@ -402,7 +441,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
                 Plan
               </label>
               <Button
-                className={`h-8 w-8 rounded-lg shrink-0 transition-colors ${isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
+                className={`h-8 w-8 rounded-lg shrink-0 transition-all duration-200 ${isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
                 onClick={handleSend}
                 disabled={isThinking || (!input.trim() && attachments.length === 0 && !isStreaming)}
                 size="icon"
@@ -422,7 +461,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             </div>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground text-center mt-2">
+        <p className="text-xs text-muted-foreground text-center mt-2 transition-all">
           {planMode ? "Plan mode on — Axis will discuss and outline, not write code" : isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
         </p>
       </div>
@@ -474,12 +513,22 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
             {serverMessages.map((msg) => (
               <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
             ))}
-            {optimisticUserMessage && (
-              <MessageBubble role="user" content={optimisticUserMessage} />
+            {showOptimistic && (
+              <MessageBubble role="user" content={optimisticUserMessage!} />
             )}
-            {(isThinking || isStreaming) && (
+            {showStreamingBubble && (
               <div ref={streamingBubbleRef}>
-                <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} isThinking={isThinking} streamingImages={streamingImages} streamingFiles={streamingFiles} sources={streamingSources.length > 0 ? streamingSources : undefined} />
+                <MessageBubble
+                  role="assistant"
+                  content={displayedContent}
+                  isStreaming={isStreaming}
+                  isThinking={isThinking}
+                  isGeneratingImage={isGeneratingImage}
+                  isSearching={isSearching}
+                  streamingImages={streamingImages}
+                  streamingFiles={streamingFiles}
+                  sources={streamingSources.length > 0 ? streamingSources : undefined}
+                />
               </div>
             )}
           </div>
