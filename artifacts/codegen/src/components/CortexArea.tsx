@@ -118,8 +118,8 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
 
     displayTimerRef.current = setInterval(() => {
       if (charQueueRef.current.length > 0) {
-        const batch = charQueueRef.current.slice(0, 5);
-        charQueueRef.current = charQueueRef.current.slice(5);
+        const batch = charQueueRef.current.slice(0, 1);
+        charQueueRef.current = charQueueRef.current.slice(1);
         setDisplayedContent((prev) => prev + batch);
       } else if (streamDoneRef.current) {
         clearInterval(displayTimerRef.current!);
@@ -134,7 +134,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
         }
       }
-    }, 30);
+    }, 8);
 
     return () => {
       if (displayTimerRef.current) clearInterval(displayTimerRef.current);

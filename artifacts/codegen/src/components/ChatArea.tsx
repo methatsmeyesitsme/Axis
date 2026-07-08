@@ -179,8 +179,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
     displayTimerRef.current = setInterval(() => {
       if (charQueueRef.current.length > 0) {
-        const batch = charQueueRef.current.slice(0, 5);
-        charQueueRef.current = charQueueRef.current.slice(5);
+        const batch = charQueueRef.current.slice(0, 1);
+        charQueueRef.current = charQueueRef.current.slice(1);
         setDisplayedContent((prev) => prev + batch);
       } else if (streamDoneRef.current) {
         clearInterval(displayTimerRef.current!);
@@ -189,14 +189,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         const tid = finalizeTargetRef.current;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
-        // Signal to keep streaming bubble visible until server messages arrive
         streamingJustFinishedRef.current = true;
         if (tid) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
       }
-    }, 30);
+    }, 8);
 
     return () => {
       if (displayTimerRef.current) clearInterval(displayTimerRef.current);
