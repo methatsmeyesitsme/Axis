@@ -265,6 +265,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   const handleSend = async () => {
     if (isStreaming) { handleCancel(); return; }
+    if (!user) { onOpenAuth(); return; }
     if (!input.trim() && attachments.length === 0) return;
 
     const attachmentText = attachments.map((a) => a.content).join("\n\n");

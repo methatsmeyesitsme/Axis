@@ -114,8 +114,9 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { title = "New Chat" } = req.body as { title?: string };
   const userId = req.session?.userId ?? null;
+  if (!userId) { res.status(401).json({ error: "Login required" }); return; }
+  const { title = "New Chat" } = req.body as { title?: string };
   const [created] = await db
     .insert(conversations)
     .values({ title, language: "General", source: "cortex", userId })
