@@ -115,8 +115,12 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   const userId = req.session?.userId ?? null;
-  if (!userId) { res.status(401).json({ error: "Login required" }); return; }
   const { title = "New Chat" } = req.body as { title?: string };
+  if (!userId) {
+    // Guest: return a virtual conversation (nothing written to DB)
+    res.status(201).json({ id: 0, title, createdAt: new Date().toISOString() });
+    return;
+  }
   const [created] = await db
     .insert(conversations)
     .values({ title, language: "General", source: "cortex", userId })
@@ -162,14 +166,24 @@ router.get("/:id/messages", async (req, res) => {
 router.post("/:id/messages", async (req, res) => {
   const id = Number(req.params.id);
   const { content } = req.body as { content: string };
-
-  const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
-  if (!conv || conv.source !== "cortex") { res.status(404).json({ error: "Conversation not found" }); return; }
-
-  const history = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
-  await db.insert(messages).values({ conversationId: id, role: "user", content });
-
   const userId = req.session?.userId ?? null;
+
+  // Validate conversation for authenticated users (guests use virtual id=0)
+  if (userId && id !== 0) {
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
+    if (!conv || conv.source !== "cortex") { res.status(404).json({ error: "Conversation not found" }); return; }
+  }
+
+  // History is empty for guests (nothing persisted)
+  const history = (userId && id !== 0)
+    ? await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)
+    : [];
+
+  // Only persist user message for authenticated users
+  if (userId && id !== 0) {
+    await db.insert(messages).values({ conversationId: id, role: "user", content });
+  }
+
   const memoryBlock = userId ? await loadMemories(userId) : "";
 
   const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
@@ -290,7 +304,7 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
 
       // ── 4. Generate title FIRST (fast, before slow image gen) ─────────────
       const isFirstMessage = history.length === 0;
-      if (isFirstMessage) {
+      if (isFirstMessage && userId && id !== 0) {
         const newTitle = await generateTitle(content, req.log);
         req.log.info({ newTitle }, "[Cortex] title generated");
         await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
@@ -312,8 +326,10 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
         }
       }
 
-      // ── 6. Persist assistant message ──────────────────────────────────────
-      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      // ── 6. Persist assistant message (authenticated only) ─────────────────
+      if (userId && id !== 0) {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      }
 
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);

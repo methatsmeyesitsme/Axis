@@ -205,7 +205,6 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
 
   const handleSend = async () => {
     if (isStreaming) { handleCancel(); return; }
-    if (!user) { onOpenAuth(); return; }
     if (!input.trim() && attachments.length === 0) return;
 
     const attachmentText = attachments.map((a) => a.content).join("\n\n");
@@ -218,11 +217,11 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     setInput("");
     setAttachments([]);
 
-    if (!targetId) {
+    if (targetId === null) {
       const newConv = await createMutation.mutateAsync({ data: { title: "New Chat" } });
       targetId = newConv.id;
       onConversationCreated(targetId);
-      queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
+      if (user) queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
     }
 
     charQueueRef.current = "";

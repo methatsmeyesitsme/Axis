@@ -118,8 +118,12 @@ router.get("/conversations", async (req, res) => {
 
 router.post("/conversations", async (req, res) => {
   const userId = req.session?.userId ?? null;
-  if (!userId) { res.status(401).json({ error: "Login required" }); return; }
   const { title = "New Chat", language = "TypeScript" } = req.body as { title?: string; language?: string };
+  if (!userId) {
+    // Guest: return a virtual conversation (nothing written to DB)
+    res.status(201).json({ id: 0, title, language, createdAt: new Date().toISOString() });
+    return;
+  }
   const [created] = await db
     .insert(conversations)
     .values({ title, language, source: "axis", userId })
@@ -169,15 +173,27 @@ router.get("/conversations/:id/messages", async (req, res) => {
 
 router.post("/conversations/:id/messages", async (req, res) => {
   const id = Number(req.params.id);
-  const { content, planMode = false } = req.body as { content: string; planMode?: boolean };
-
-  const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
-  if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
-
-  const history = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
-  await db.insert(messages).values({ conversationId: id, role: "user", content });
-
+  const { content, planMode = false, language: bodyLanguage } = req.body as { content: string; planMode?: boolean; language?: string };
   const userId = req.session?.userId ?? null;
+
+  // Resolve language: authenticated users load from DB; guests supply via body
+  let convLanguage = bodyLanguage ?? "TypeScript";
+  if (userId && id !== 0) {
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
+    if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
+    convLanguage = conv.language;
+  }
+
+  // History is empty for guests (nothing persisted)
+  const history = (userId && id !== 0)
+    ? await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)
+    : [];
+
+  // Only persist user message for authenticated users
+  if (userId && id !== 0) {
+    await db.insert(messages).values({ conversationId: id, role: "user", content });
+  }
+
   const memoryBlock = userId ? await loadMemories(userId) : "";
 
   const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
@@ -185,11 +201,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   let systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.
 
-You are Axis, an expert AI programming assistant created by CodeGen, specializing in ${conv.language}.
+You are Axis, an expert AI programming assistant created by CodeGen, specializing in ${convLanguage}.
 
 CORE IDENTITY:
 - You are Axis — brilliant, precise, and friendly. You make complex code feel approachable.
-- You specialize in ${conv.language} but are fluent in all major programming languages.
+- You specialize in ${convLanguage} but are fluent in all major programming languages.
 - You think like a senior engineer and teach like a great mentor.${memoryBlock ? `\n\nWHAT YOU KNOW ABOUT THIS USER:\n${memoryBlock}` : ""}
 
 CORE BEHAVIOR:
@@ -205,8 +221,8 @@ CORE BEHAVIOR:
    - Step 4: Briefly explain what changed and why
 
 3. When GENERATING new code:
-   - Write production-quality, clean, well-commented ${conv.language} code
-   - Follow best practices and idioms for ${conv.language}
+   - Write production-quality, clean, well-commented ${convLanguage} code
+   - Follow best practices and idioms for ${convLanguage}
    - Include error handling where appropriate
    - After the code, explain how it works and key design decisions
 
@@ -323,7 +339,7 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
 
       // ── 4. Generate title FIRST (fast, before slow image gen) ─────────────
       const isFirstMessage = history.length === 0;
-      if (isFirstMessage) {
+      if (isFirstMessage && userId && id !== 0) {
         const newTitle = await generateTitle(content, req.log);
         req.log.info({ newTitle }, "[Axis] title generated");
         await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
@@ -345,8 +361,10 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
         }
       }
 
-      // ── 6. Persist assistant message ──────────────────────────────────────
-      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      // ── 6. Persist assistant message (authenticated only) ─────────────────
+      if (userId && id !== 0) {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      }
 
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);

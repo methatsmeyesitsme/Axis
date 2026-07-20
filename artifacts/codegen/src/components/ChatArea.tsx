@@ -265,7 +265,6 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   const handleSend = async () => {
     if (isStreaming) { handleCancel(); return; }
-    if (!user) { onOpenAuth(); return; }
     if (!input.trim() && attachments.length === 0) return;
 
     const attachmentText = attachments.map((a) => a.content).join("\n\n");
@@ -280,11 +279,11 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     setInput("");
     setAttachments([]);
 
-    if (!targetId) {
+    if (targetId === null) {
       const newConv = await createMutation.mutateAsync({ data: { title: "New Chat", language: selectedLanguage } });
       targetId = newConv.id;
       onConversationCreated(targetId);
-      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+      if (user) queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
 
     charQueueRef.current = "";
@@ -308,7 +307,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       const response = await fetch(`/api/openai/conversations/${targetId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: prompt, planMode }),
+        body: JSON.stringify({ content: prompt, planMode, language: selectedLanguage }),
         signal: controller.signal,
       });
 
