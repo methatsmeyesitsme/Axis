@@ -27,6 +27,9 @@ interface Attachment {
   name: string;
   content: string;
   isImage: boolean;
+  b64?: string;
+  mimeType?: string;
+  previewUrl?: string;
 }
 
 function looksLikeCode(text: string): boolean {

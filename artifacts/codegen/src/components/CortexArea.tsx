@@ -25,6 +25,10 @@ interface CortexAreaProps {
 interface Attachment {
   name: string;
   content: string;
+  isImage: boolean;
+  b64?: string;
+  mimeType?: string;
+  previewUrl?: string;
 }
 
 export default function CortexArea({ conversationId, onConversationCreated, onOpenAuth }: CortexAreaProps) {
