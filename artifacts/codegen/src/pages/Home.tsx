@@ -19,7 +19,7 @@ export default function Home() {
   const { user, isLoading } = useAuth();
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (!isLoading) {
       setActiveConversationId(null);
       setActiveCortexConversationId(null);
     }
