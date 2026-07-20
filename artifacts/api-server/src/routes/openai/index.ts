@@ -267,6 +267,7 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
     });
 
     let lastGroundingChunks: Array<{ web?: { uri: string; title?: string } }> = [];
+    let generatingImageNotified = false;
 
     for await (const chunk of stream) {
       if (res.writableEnded) break;
@@ -274,6 +275,11 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
       if (text) {
         fullResponse += text;
         res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
+        // Notify client as soon as [IMAGE_PROMPT appears — long before image gen starts
+        if (!generatingImageNotified && fullResponse.search(/\[IMAGE_PROMPT/i) >= 0) {
+          generatingImageNotified = true;
+          res.write(`data: ${JSON.stringify({ generatingImage: true })}\n\n`);
+        }
       }
       const meta = (chunk as unknown as { candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ web?: { uri: string; title?: string } }> } }> })
         .candidates?.[0]?.groundingMetadata;
@@ -325,12 +331,9 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
         }
       }
 
-      // ── 5. Generate image (slow — title already sent above) ───────────────
+      // ── 5. Generate image (slow — generatingImage already sent during stream) ──
       if (hasImagePrompt && imagePromptText) {
         try {
-          if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ generatingImage: true })}\n\n`);
-          }
           const imgResult = await generateImage(imagePromptText);
           savedContent += `\n[IMAGE:${imgResult.mimeType}|${imgResult.b64_json}]`;
           if (!res.writableEnded) {
