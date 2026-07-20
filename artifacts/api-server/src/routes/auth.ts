@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, users } from "@workspace/db";
+import { db, users, conversations } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
@@ -109,7 +109,11 @@ router.post("/login", async (req, res) => {
   res.json({ id: user.id, email: user.email, username: user.username });
 });
 
-router.post("/logout", (req, res) => {
+router.post("/logout", async (req, res) => {
+  const userId = req.session.userId;
+  if (userId) {
+    await db.delete(conversations).where(eq(conversations.userId, userId));
+  }
   req.session.destroy(() => {
     res.json({ ok: true });
   });
