@@ -118,7 +118,7 @@ router.post("/", async (req, res) => {
   const { title = "New Chat" } = req.body as { title?: string };
   if (!userId) {
     // Guest: return a virtual conversation (nothing written to DB)
-    res.status(201).json({ id: 0, title, createdAt: new Date().toISOString() });
+    res.status(201).json({ id: -1, title, createdAt: new Date().toISOString() });
     return;
   }
   const [created] = await db
@@ -169,18 +169,18 @@ router.post("/:id/messages", async (req, res) => {
   const userId = req.session?.userId ?? null;
 
   // Validate conversation for authenticated users (guests use virtual id=0)
-  if (userId && id !== 0) {
+  if (userId && id > 0) {
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
     if (!conv || conv.source !== "cortex") { res.status(404).json({ error: "Conversation not found" }); return; }
   }
 
   // History is empty for guests (nothing persisted)
-  const history = (userId && id !== 0)
+  const history = (userId && id > 0)
     ? await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)
     : [];
 
   // Only persist user message for authenticated users
-  if (userId && id !== 0) {
+  if (userId && id > 0) {
     await db.insert(messages).values({ conversationId: id, role: "user", content });
   }
 
@@ -304,7 +304,7 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
 
       // ── 4. Generate title FIRST (fast, before slow image gen) ─────────────
       const isFirstMessage = history.length === 0;
-      if (isFirstMessage && userId && id !== 0) {
+      if (isFirstMessage && userId && id > 0) {
         const newTitle = await generateTitle(content, req.log);
         req.log.info({ newTitle }, "[Cortex] title generated");
         await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
@@ -327,7 +327,7 @@ Use the correct file extension (.csv for spreadsheets, .txt for text, .json for 
       }
 
       // ── 6. Persist assistant message (authenticated only) ─────────────────
-      if (userId && id !== 0) {
+      if (userId && id > 0) {
         await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
       }
 
