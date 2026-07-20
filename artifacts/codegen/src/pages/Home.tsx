@@ -18,6 +18,13 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("codex");
   const { user, isLoading } = useAuth();
 
+  useEffect(() => {
+    if (!isLoading && !user) {
+      setActiveConversationId(null);
+      setActiveCortexConversationId(null);
+    }
+  }, [user, isLoading]);
+
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
       <Sidebar

@@ -3,7 +3,6 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { X, Sun, Moon, LogOut, User, Mail, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getListOpenaiConversationsQueryKey } from "@workspace/api-client-react";
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -42,7 +41,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     setLoggingOut(true);
     try {
       await logout();
-      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+      queryClient.clear();
       onClose();
     } finally {
       setLoggingOut(false);
