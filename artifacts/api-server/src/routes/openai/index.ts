@@ -173,7 +173,8 @@ router.get("/conversations/:id/messages", async (req, res) => {
 
 router.post("/conversations/:id/messages", async (req, res) => {
   const id = Number(req.params.id);
-  const { content, planMode = false, language: bodyLanguage } = req.body as { content: string; planMode?: boolean; language?: string };
+  const { content, planMode = false, language: bodyLanguage, guestHistory: rawGuestHistory } = req.body as { content: string; planMode?: boolean; language?: string; guestHistory?: Array<{role: string; content: string}> };
+  const guestHistory: Array<{role: string; content: string}> = rawGuestHistory ?? [];
   const userId = req.session?.userId ?? null;
 
   // Resolve language: authenticated users load from DB; guests supply via body
@@ -184,10 +185,10 @@ router.post("/conversations/:id/messages", async (req, res) => {
     convLanguage = conv.language;
   }
 
-  // History is empty for guests (nothing persisted)
-  const history = (userId && id > 0)
-    ? await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)
-    : [];
+  // History: DB for authenticated users, in-body for guests
+  const history: Array<{role: string; content: string}> = (userId && id > 0)
+    ? (await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)).map((m) => ({ role: m.role, content: m.content }))
+    : guestHistory;
 
   // Only persist user message for authenticated users
   if (userId && id > 0) {

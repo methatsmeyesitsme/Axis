@@ -44,6 +44,8 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [optimisticBaseline, setOptimisticBaseline] = useState(0);
 
+  const [guestMessages, setGuestMessages] = useState<Array<{role: "user"|"assistant"; content: string}>>([]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingBubbleRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -51,16 +53,20 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const fileInputRef = useRef<HTMLInputElement>(null);
   const charQueueRef = useRef<string>("");
   const displayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamingContentRef = useRef<string>("");
   const streamDoneRef = useRef(false);
   const finalizeTargetRef = useRef<number | null>(null);
   const streamingJustFinishedRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
+  const guestPendingUserRef = useRef<string>("");
+
+  const isGuest = conversationId !== null && conversationId < 0;
 
   const { data: conversation } = useGetCortexConversation(conversationId!, {
-    query: { enabled: !!conversationId, queryKey: getGetCortexConversationQueryKey(conversationId!) },
+    query: { enabled: conversationId !== null && conversationId > 0, queryKey: getGetCortexConversationQueryKey(conversationId!) },
   });
   const { data: serverMessages = [] } = useListCortexMessages(conversationId!, {
-    query: { enabled: !!conversationId, queryKey: getListCortexMessagesQueryKey(conversationId!) },
+    query: { enabled: conversationId !== null && conversationId > 0, queryKey: getListCortexMessagesQueryKey(conversationId!) },
   });
   const createMutation = useCreateCortexConversation();
 
@@ -129,7 +135,25 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
         setIsStreaming(false);
         setOptimisticUserMessage(null);
         streamingJustFinishedRef.current = true;
-        if (tid) {
+        if (tid !== null && tid < 0) {
+          // Guest: commit exchange to in-memory history then clear the streaming bubble
+          const userMsg = guestPendingUserRef.current;
+          const aiMsg = streamingContentRef.current;
+          if (userMsg) {
+            setGuestMessages((prev) => [
+              ...prev,
+              { role: "user" as const, content: userMsg },
+              { role: "assistant" as const, content: aiMsg },
+            ]);
+          }
+          guestPendingUserRef.current = "";
+          streamingContentRef.current = "";
+          setDisplayedContent("");
+          setStreamingImages([]);
+          setStreamingFiles([]);
+          setStreamingSources([]);
+          setIsGeneratingImage(false);
+        } else if (tid) {
           queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
         }
@@ -224,7 +248,9 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
       if (user) queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
     }
 
+    guestPendingUserRef.current = fullContent;
     charQueueRef.current = "";
+    streamingContentRef.current = "";
     streamDoneRef.current = false;
     streamingJustFinishedRef.current = false;
     finalizeTargetRef.current = targetId;
@@ -244,7 +270,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
       const response = await fetch(`/api/cortex/conversations/${targetId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: fullContent }),
+        body: JSON.stringify({ content: fullContent, guestHistory: guestMessages }),
         signal: controller.signal,
       });
 
@@ -272,6 +298,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
             const data = JSON.parse(trimmed.slice(6));
             if (data.content) {
               charQueueRef.current += data.content as string;
+              streamingContentRef.current += data.content as string;
             }
             if (data.generatingImage) {
               // flushSync forces a render before imageData can arrive in the same batch
@@ -312,8 +339,10 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
         streamingJustFinishedRef.current = true;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
+        guestPendingUserRef.current = "";
+        streamingContentRef.current = "";
         const tid = finalizeTargetRef.current;
-        if (tid) {
+        if (tid !== null && tid > 0) {
           queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
         }
@@ -326,7 +355,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   };
 
   // ── Fix: don't show optimistic if server already has the user message ──────
-  const showOptimistic = optimisticUserMessage && serverMessages.length <= optimisticBaseline;
+  const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
   const showBubble = isStreaming || displayedContent.length > 0;
 
   const inputBar = (placeholder: string) => (
@@ -400,7 +429,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     </div>
   );
 
-  if (!conversationId) {
+  if (conversationId === null) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background">
         <div className="text-center px-8 pt-10 pb-0">
@@ -424,7 +453,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
       <div className="h-14 border-b flex items-center px-6 bg-card shrink-0">
         <div className="flex flex-col">
-          <span className="font-semibold text-sm">{conversation?.title ?? "Loading..."}</span>
+          <span className="font-semibold text-sm">{isGuest ? "New Chat" : (conversation?.title ?? "Loading...")}</span>
           <span className="text-xs text-muted-foreground">General AI</span>
         </div>
       </div>
@@ -432,9 +461,14 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
       <div className="flex-1 relative overflow-hidden">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
           <div className="max-w-4xl mx-auto space-y-6 pb-4">
-            {serverMessages.map((msg) => (
-              <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
-            ))}
+            {isGuest
+              ? guestMessages.map((msg, i) => (
+                  <MessageBubble key={i} role={msg.role} content={msg.content} />
+                ))
+              : serverMessages.map((msg) => (
+                  <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
+                ))
+            }
             {showOptimistic && (
               <MessageBubble role="user" content={optimisticUserMessage!} />
             )}

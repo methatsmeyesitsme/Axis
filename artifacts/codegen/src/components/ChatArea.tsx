@@ -104,6 +104,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [optimisticBaseline, setOptimisticBaseline] = useState(0);
 
+  const [guestMessages, setGuestMessages] = useState<Array<{role: "user"|"assistant"; content: string}>>([]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingBubbleRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -116,12 +118,15 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const finalizeTargetRef = useRef<number | null>(null);
   const streamingJustFinishedRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
+  const guestPendingUserRef = useRef<string>("");
+
+  const isGuest = conversationId !== null && conversationId < 0;
 
   const { data: conversation } = useGetOpenaiConversation(conversationId!, {
-    query: { enabled: !!conversationId, queryKey: getGetOpenaiConversationQueryKey(conversationId!) },
+    query: { enabled: conversationId !== null && conversationId > 0, queryKey: getGetOpenaiConversationQueryKey(conversationId!) },
   });
   const { data: serverMessages = [] } = useListOpenaiMessages(conversationId!, {
-    query: { enabled: !!conversationId, queryKey: getListOpenaiMessagesQueryKey(conversationId!) },
+    query: { enabled: conversationId !== null && conversationId > 0, queryKey: getListOpenaiMessagesQueryKey(conversationId!) },
   });
   const createMutation = useCreateOpenaiConversation();
 
@@ -190,7 +195,25 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         setIsStreaming(false);
         setOptimisticUserMessage(null);
         streamingJustFinishedRef.current = true;
-        if (tid) {
+        if (tid !== null && tid < 0) {
+          // Guest: commit exchange to in-memory history then clear the streaming bubble
+          const userMsg = guestPendingUserRef.current;
+          const aiMsg = streamingContentRef.current;
+          if (userMsg) {
+            setGuestMessages((prev) => [
+              ...prev,
+              { role: "user" as const, content: userMsg },
+              { role: "assistant" as const, content: aiMsg },
+            ]);
+          }
+          guestPendingUserRef.current = "";
+          streamingContentRef.current = "";
+          setDisplayedContent("");
+          setStreamingImages([]);
+          setStreamingFiles([]);
+          setStreamingSources([]);
+          setIsGeneratingImage(false);
+        } else if (tid) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
@@ -286,6 +309,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       if (user) queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
 
+    guestPendingUserRef.current = prompt;
     charQueueRef.current = "";
     streamingContentRef.current = "";
     streamDoneRef.current = false;
@@ -307,7 +331,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       const response = await fetch(`/api/openai/conversations/${targetId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: prompt, planMode, language: selectedLanguage }),
+        body: JSON.stringify({ content: prompt, planMode, language: selectedLanguage, guestHistory: guestMessages }),
         signal: controller.signal,
       });
 
@@ -369,7 +393,6 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       setIsThinking(false);
     } finally {
       abortRef.current = null;
-      streamingContentRef.current = "";
       setIsThinking(false);
       streamDoneRef.current = true;
       if (charQueueRef.current.length === 0) {
@@ -377,8 +400,10 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         streamingJustFinishedRef.current = true;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
+        guestPendingUserRef.current = "";
+        streamingContentRef.current = "";
         const tid = finalizeTargetRef.current;
-        if (tid) {
+        if (tid !== null && tid > 0) {
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
@@ -391,7 +416,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   };
 
   // ── Fix: don't show optimistic if server already has the user message ──────
-  const showOptimistic = optimisticUserMessage && serverMessages.length <= optimisticBaseline;
+  const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
   const showBubble = isStreaming || displayedContent.length > 0;
 
   const inputBar = (placeholder: string) => (
@@ -482,7 +507,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     </div>
   );
 
-  if (!conversationId) {
+  if (conversationId === null) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background">
         <div className="text-center px-8 pt-10 pb-0">
@@ -511,8 +536,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
       <div className="h-14 border-b flex items-center justify-between px-6 bg-card shrink-0">
         <div className="flex flex-col">
-          <span className="font-semibold text-sm">{conversation?.title ?? "Loading..."}</span>
-          <span className="text-xs text-muted-foreground">{conversation?.language ?? selectedLanguage}</span>
+          <span className="font-semibold text-sm">{isGuest ? "New Chat" : (conversation?.title ?? "Loading...")}</span>
+          <span className="text-xs text-muted-foreground">{isGuest ? selectedLanguage : (conversation?.language ?? selectedLanguage)}</span>
         </div>
         {planMode && (
           <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-medium">
@@ -524,9 +549,14 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
       <div className="flex-1 relative overflow-hidden">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
           <div className="max-w-4xl mx-auto space-y-6 pb-4">
-            {serverMessages.map((msg) => (
-              <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
-            ))}
+            {isGuest
+              ? guestMessages.map((msg, i) => (
+                  <MessageBubble key={i} role={msg.role} content={msg.content} />
+                ))
+              : serverMessages.map((msg) => (
+                  <MessageBubble key={msg.id} role={msg.role as "user" | "assistant"} content={msg.content} />
+                ))
+            }
             {showOptimistic && (
               <MessageBubble role="user" content={optimisticUserMessage!} />
             )}

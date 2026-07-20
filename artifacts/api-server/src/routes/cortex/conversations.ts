@@ -165,19 +165,20 @@ router.get("/:id/messages", async (req, res) => {
 
 router.post("/:id/messages", async (req, res) => {
   const id = Number(req.params.id);
-  const { content } = req.body as { content: string };
+  const { content, guestHistory: rawGuestHistory } = req.body as { content: string; guestHistory?: Array<{role: string; content: string}> };
+  const guestHistory: Array<{role: string; content: string}> = rawGuestHistory ?? [];
   const userId = req.session?.userId ?? null;
 
-  // Validate conversation for authenticated users (guests use virtual id=0)
+  // Validate conversation for authenticated users (guests use virtual id=-1)
   if (userId && id > 0) {
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
     if (!conv || conv.source !== "cortex") { res.status(404).json({ error: "Conversation not found" }); return; }
   }
 
-  // History is empty for guests (nothing persisted)
-  const history = (userId && id > 0)
-    ? await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)
-    : [];
+  // History: DB for authenticated users, in-body for guests
+  const history: Array<{role: string; content: string}> = (userId && id > 0)
+    ? (await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)).map((m) => ({ role: m.role, content: m.content }))
+    : guestHistory;
 
   // Only persist user message for authenticated users
   if (userId && id > 0) {
