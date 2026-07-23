@@ -84,7 +84,7 @@ function FileDownloadCard({ filename, b64, mimeType }: { filename: string; b64: 
   );
 }
 
-function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
+function ImageBlock({ b64, mimeType, maxWidth = 480 }: { b64: string; mimeType: string; maxWidth?: number }) {
   const [copied, setCopied] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const dataUrl = `data:${mimeType};base64,${b64}`;
@@ -118,7 +118,7 @@ function ImageBlock({ b64, mimeType }: { b64: string; mimeType: string }) {
         src={dataUrl}
         alt="AI generated"
         className="block max-w-full rounded-xl"
-        style={{ maxWidth: 480 }}
+        style={{ maxWidth }}
         onLoad={() => setLoaded(true)}
       />
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -360,7 +360,7 @@ export default function MessageBubble({
         <div className="text-[14.5px]">
           {renderContent(text)}
           {allImages.map((img, i) => (
-            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} />
+            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} maxWidth={isUser ? 240 : 480} />
           ))}
           {isGeneratingImage && <CreatingImagePlaceholder />}
           {allFiles.map((f, i) => (
