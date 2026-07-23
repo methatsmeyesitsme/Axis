@@ -386,6 +386,11 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
           }
         } catch (imgErr) {
           req.log.error({ imgErr }, "[Axis] Image generation failed");
+          const failureNote = "\n\n_Sorry, I wasn't able to generate that image just now — please try again._";
+          savedContent += failureNote;
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ imageFailed: true, content: failureNote })}\n\n`);
+          }
         }
       }
 

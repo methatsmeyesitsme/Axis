@@ -16,6 +16,7 @@ import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronD
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { AIThinkingRow } from "./AIStatusLabel";
+import { resizeImageFile } from "@/lib/utils";
 
 interface ChatAreaProps {
   conversationId: number | null;
@@ -272,26 +273,35 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     const files = Array.from(e.target.files ?? []);
     files.forEach((file) => {
       if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          // dataUrl looks like "data:image/png;base64,AAAA..." — split off the prefix
-          const commaIdx = dataUrl.indexOf(",");
-          const b64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
-          const mimeType = file.type || "image/png";
-          setAttachments((prev) => [
-            ...prev,
-            {
-              name: file.name,
-              content: `[IMAGE:${mimeType}|${b64}]`,
-              isImage: true,
-              b64,
-              mimeType,
-              previewUrl: dataUrl,
-            },
-          ]);
-        };
-        reader.readAsDataURL(file);
+        resizeImageFile(file)
+          .then(({ dataUrl, b64, mimeType }) => {
+            setAttachments((prev) => [
+              ...prev,
+              {
+                name: file.name,
+                content: `[IMAGE:${mimeType}|${b64}]`,
+                isImage: true,
+                b64,
+                mimeType,
+                previewUrl: dataUrl,
+              },
+            ]);
+          })
+          .catch(() => {
+            // Fallback: embed the original file as-is if resizing fails
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const dataUrl = ev.target?.result as string;
+              const commaIdx = dataUrl.indexOf(",");
+              const b64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+              const mimeType = file.type || "image/png";
+              setAttachments((prev) => [
+                ...prev,
+                { name: file.name, content: `[IMAGE:${mimeType}|${b64}]`, isImage: true, b64, mimeType, previewUrl: dataUrl },
+              ]);
+            };
+            reader.readAsDataURL(file);
+          });
       } else {
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -381,6 +391,9 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           if (!trimmed.startsWith("data: ")) continue;
           try {
             const data = JSON.parse(trimmed.slice(6));
+            if (data.imageFailed) {
+              setIsGeneratingImage(false);
+            }
             if (data.content) {
               streamingContentRef.current += data.content as string;
               charQueueRef.current += data.content as string;
