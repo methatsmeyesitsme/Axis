@@ -444,6 +444,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
+      } else {
+        // There's queued text (e.g. an error message) but if the request failed
+        // before streaming ever started, isStreaming is still false — which means
+        // the typewriter interval below never mounts, so the queue never drains
+        // and this exchange (including any attached image) gets stuck and lost.
+        // Force it on so the interval picks up, displays the message, and finalizes.
+        setIsStreaming(true);
       }
     }
   };

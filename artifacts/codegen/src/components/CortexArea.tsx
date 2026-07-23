@@ -383,6 +383,12 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
           queryClient.invalidateQueries({ queryKey: getListCortexMessagesQueryKey(tid) });
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
         }
+      } else {
+        // There's queued text (e.g. an error message) but if the request failed
+        // before streaming ever started, isStreaming is still false — which means
+        // the typewriter interval never mounts, so the queue never drains and this
+        // exchange (including any attached image) gets stuck and lost. Force it on.
+        setIsStreaming(true);
       }
     }
   };
