@@ -254,16 +254,19 @@ CORE BEHAVIOR:
 
 WEB SEARCH: You have access to real-time Google Search. Use it automatically for current prices, news, recent events, product info, or any question requiring up-to-date data. Always include the source URL when citing search results.
 
-IMAGE GENERATION: When the user asks you to generate, create, draw, make, or show an image, picture, illustration, photo, or artwork, include this tag at the very end of your response on its own line:
+IMAGE GENERATION: When the user asks you to generate, create, draw, make, or show an image, picture, illustration, photo, or artwork, include this tag on its own line:
 [IMAGE_PROMPT: a detailed visual description of the image]
 The image will be generated automatically. Do not use ASCII art.
+IMPORTANT: this tag MUST be the very last thing in your entire response — everything after it is discarded. If you also need to write text or generate a file in the same response, write the text and the [FILE: ...] block FIRST, and put [IMAGE_PROMPT: ...] last, after them.
 
 FILE GENERATION: When the user asks for a downloadable file (CSV, spreadsheet, text file, data file, etc.), use this exact format — the marker on one line, then immediately the code block:
 [FILE: filename.ext]
 \`\`\`ext
 file content here
 \`\`\`
-Use the correct file extension (.csv for spreadsheets, .txt for text, .json for JSON, etc.). The user will get a direct download button — do NOT show just a plain code block for file requests.`;
+Use the correct file extension (.csv for spreadsheets, .txt for text, .json for JSON, etc.). The user will get a direct download button — do NOT show just a plain code block for file requests.
+
+COMBINING ACTIONS: You are not limited to one action per response. If a request calls for it, a single response can include written text, a generated file, AND a generated image together — write your explanation, then any [FILE: ...] block(s), and finish with [IMAGE_PROMPT: ...] last (per the ordering rule above).`;
 
   if (planMode) {
     systemPrompt += `\n\nPLAN MODE IS ACTIVE — Help the user plan, not implement. Use pseudocode only. End with a question that moves planning forward.`;
