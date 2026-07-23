@@ -24,6 +24,23 @@ function getMimeType(ext: string): string {
   return MIME_MAP[ext.toLowerCase()] ?? "text/plain";
 }
 
+// Pulls any [IMAGE:mimeType|base64] markers out of a user message so they can be
+// sent to Gemini as real inlineData parts (i.e. the model can actually see them),
+// rather than as a giant base64 text blob.
+function extractImageParts(content: string): {
+  text: string;
+  imageParts: Array<{ inlineData: { mimeType: string; data: string } }>;
+} {
+  const imageParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
+  const text = content
+    .replace(/\[IMAGE:([^|]+)\|([^\]]+)\]/g, (_, mimeType: string, b64: string) => {
+      imageParts.push({ inlineData: { mimeType: mimeType.trim(), data: b64.trim() } });
+      return "";
+    })
+    .trim();
+  return { text, imageParts };
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async function loadMemories(userId: number): Promise<string> {
@@ -218,16 +235,23 @@ file content here
 Use the correct file extension (.csv for spreadsheets, .txt for text, .json for JSON, etc.). The user will get a direct download button.`;
 
   // Strip huge embedded data from history so Gemini context stays manageable
+  const { text: currentText, imageParts: currentImageParts } = extractImageParts(content);
   const chatMessages = [
     ...history.map((m) => ({
       role: m.role === "assistant" ? "model" : ("user" as "model" | "user"),
       parts: [{
         text: m.content
-          .replace(/\[IMAGE:[^\]]*\]/g, "[image was generated here]")
+          .replace(/\[IMAGE:[^\]]*\]/g, "[image was attached here]")
           .replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]"),
       }],
     })),
-    { role: "user" as const, parts: [{ text: content }] },
+    {
+      role: "user" as const,
+      parts: [
+        ...currentImageParts,
+        { text: currentText || "Please look at the attached image." },
+      ],
+    },
   ];
 
   res.setHeader("Content-Type", "text/event-stream");

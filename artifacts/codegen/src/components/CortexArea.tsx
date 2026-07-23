@@ -214,12 +214,31 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     const files = Array.from(e.target.files ?? []);
     files.forEach((file) => {
       if (file.type.startsWith("image/")) {
-        setAttachments((prev) => [...prev, { name: file.name, content: `[Image attached: ${file.name}]` }]);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const dataUrl = ev.target?.result as string;
+          // dataUrl looks like "data:image/png;base64,AAAA..." — split off the prefix
+          const commaIdx = dataUrl.indexOf(",");
+          const b64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+          const mimeType = file.type || "image/png";
+          setAttachments((prev) => [
+            ...prev,
+            {
+              name: file.name,
+              content: `[IMAGE:${mimeType}|${b64}]`,
+              isImage: true,
+              b64,
+              mimeType,
+              previewUrl: dataUrl,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target?.result as string;
-          setAttachments((prev) => [...prev, { name: file.name, content: `File: ${file.name}\n\`\`\`\n${text}\n\`\`\`` }]);
+          setAttachments((prev) => [...prev, { name: file.name, content: `File: ${file.name}\n\`\`\`\n${text}\n\`\`\``, isImage: false }]);
         };
         reader.readAsText(file);
       }
@@ -239,7 +258,9 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
     const fullContent = attachmentText ? `${attachmentText}\n\n${input}` : input;
 
     let targetId = conversationId;
-    const optimisticText = input.trim() || (attachments.length > 0 ? `[${attachments.length} file${attachments.length > 1 ? "s" : ""} attached]` : "");
+    const optimisticText = attachmentText
+      ? `${attachmentText}${input.trim() ? `\n\n${input.trim()}` : ""}`
+      : input;
     setOptimisticUserMessage(optimisticText);
     setOptimisticBaseline(serverMessages.length);
     setInput("");
@@ -377,7 +398,11 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
           <div className="flex flex-wrap gap-2 mb-2">
             {attachments.map((att, i) => (
               <div key={i} className="flex items-center gap-1.5 bg-muted border border-border rounded-lg px-2.5 py-1 text-xs text-foreground">
-                <Paperclip className="w-3 h-3 text-muted-foreground" />
+                {att.isImage && att.previewUrl ? (
+                  <img src={att.previewUrl} alt={att.name} className="w-5 h-5 rounded object-cover shrink-0" />
+                ) : (
+                  <Paperclip className="w-3 h-3 text-muted-foreground" />
+                )}
                 <span className="max-w-[120px] truncate">{att.name}</span>
                 <button onClick={() => removeAttachment(i)} className="text-muted-foreground hover:text-foreground ml-0.5">
                   <X className="w-3 h-3" />
