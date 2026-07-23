@@ -12,8 +12,8 @@ export function cn(...inputs: ClassValue[]) {
  */
 export function resizeImageFile(
   file: File,
-  maxDimension = 1280,
-  quality = 0.82
+  maxDimension = 900,
+  quality = 0.7
 ): Promise<{ dataUrl: string; b64: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
