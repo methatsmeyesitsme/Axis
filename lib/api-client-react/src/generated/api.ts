@@ -24,6 +24,11 @@ import type {
   CortexConversationWithMessages,
   CortexMessage,
   CortexMessageInput,
+  ForgeConversation,
+  ForgeConversationInput,
+  ForgeConversationWithMessages,
+  ForgeMessage,
+  ForgeMessageInput,
   HealthStatus,
   OpenaiConversation,
   OpenaiConversationInput,
@@ -1315,4 +1320,604 @@ export const useSendCortexMessage = <
   TContext
 > => {
   return useMutation(getSendCortexMessageMutationOptions(options));
+};
+
+/**
+ * @summary List all Forge apps (conversations)
+ */
+export const getListForgeConversationsUrl = () => {
+  return `/api/forge/conversations`;
+};
+
+export const listForgeConversations = async (
+  options?: RequestInit,
+): Promise<ForgeConversation[]> => {
+  return customFetch<ForgeConversation[]>(getListForgeConversationsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListForgeConversationsQueryKey = () => {
+  return [`/api/forge/conversations`] as const;
+};
+
+export const getListForgeConversationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listForgeConversations>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listForgeConversations>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListForgeConversationsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listForgeConversations>>
+  > = ({ signal }) => listForgeConversations({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listForgeConversations>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListForgeConversationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listForgeConversations>>
+>;
+export type ListForgeConversationsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all Forge apps (conversations)
+ */
+
+export function useListForgeConversations<
+  TData = Awaited<ReturnType<typeof listForgeConversations>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listForgeConversations>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListForgeConversationsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a new Forge app (conversation)
+ */
+export const getCreateForgeConversationUrl = () => {
+  return `/api/forge/conversations`;
+};
+
+export const createForgeConversation = async (
+  forgeConversationInput: ForgeConversationInput,
+  options?: RequestInit,
+): Promise<ForgeConversation> => {
+  return customFetch<ForgeConversation>(getCreateForgeConversationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(forgeConversationInput),
+  });
+};
+
+export const getCreateForgeConversationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createForgeConversation>>,
+    TError,
+    { data: BodyType<ForgeConversationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createForgeConversation>>,
+  TError,
+  { data: BodyType<ForgeConversationInput> },
+  TContext
+> => {
+  const mutationKey = ["createForgeConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createForgeConversation>>,
+    { data: BodyType<ForgeConversationInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createForgeConversation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateForgeConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createForgeConversation>>
+>;
+export type CreateForgeConversationMutationBody =
+  BodyType<ForgeConversationInput>;
+export type CreateForgeConversationMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a new Forge app (conversation)
+ */
+export const useCreateForgeConversation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createForgeConversation>>,
+    TError,
+    { data: BodyType<ForgeConversationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createForgeConversation>>,
+  TError,
+  { data: BodyType<ForgeConversationInput> },
+  TContext
+> => {
+  return useMutation(getCreateForgeConversationMutationOptions(options));
+};
+
+/**
+ * @summary Get Forge app (conversation) with messages
+ */
+export const getGetForgeConversationUrl = (id: number) => {
+  return `/api/forge/conversations/${id}`;
+};
+
+export const getForgeConversation = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ForgeConversationWithMessages> => {
+  return customFetch<ForgeConversationWithMessages>(
+    getGetForgeConversationUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetForgeConversationQueryKey = (id: number) => {
+  return [`/api/forge/conversations/${id}`] as const;
+};
+
+export const getGetForgeConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getForgeConversation>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getForgeConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetForgeConversationQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getForgeConversation>>
+  > = ({ signal }) => getForgeConversation(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getForgeConversation>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetForgeConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getForgeConversation>>
+>;
+export type GetForgeConversationQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get Forge app (conversation) with messages
+ */
+
+export function useGetForgeConversation<
+  TData = Awaited<ReturnType<typeof getForgeConversation>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getForgeConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetForgeConversationQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Rename a Forge app (conversation)
+ */
+export const getRenameForgeConversationUrl = (id: number) => {
+  return `/api/forge/conversations/${id}`;
+};
+
+export const renameForgeConversation = async (
+  id: number,
+  conversationRenameInput: ConversationRenameInput,
+  options?: RequestInit,
+): Promise<ForgeConversation> => {
+  return customFetch<ForgeConversation>(getRenameForgeConversationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conversationRenameInput),
+  });
+};
+
+export const getRenameForgeConversationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameForgeConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof renameForgeConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  const mutationKey = ["renameForgeConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof renameForgeConversation>>,
+    { id: number; data: BodyType<ConversationRenameInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return renameForgeConversation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RenameForgeConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof renameForgeConversation>>
+>;
+export type RenameForgeConversationMutationBody =
+  BodyType<ConversationRenameInput>;
+export type RenameForgeConversationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Rename a Forge app (conversation)
+ */
+export const useRenameForgeConversation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof renameForgeConversation>>,
+    TError,
+    { id: number; data: BodyType<ConversationRenameInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof renameForgeConversation>>,
+  TError,
+  { id: number; data: BodyType<ConversationRenameInput> },
+  TContext
+> => {
+  return useMutation(getRenameForgeConversationMutationOptions(options));
+};
+
+/**
+ * @summary Delete a Forge app (conversation)
+ */
+export const getDeleteForgeConversationUrl = (id: number) => {
+  return `/api/forge/conversations/${id}`;
+};
+
+export const deleteForgeConversation = async (
+  id: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteForgeConversationUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteForgeConversationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteForgeConversation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteForgeConversation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteForgeConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteForgeConversation>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteForgeConversation(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteForgeConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteForgeConversation>>
+>;
+
+export type DeleteForgeConversationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Delete a Forge app (conversation)
+ */
+export const useDeleteForgeConversation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteForgeConversation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteForgeConversation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteForgeConversationMutationOptions(options));
+};
+
+/**
+ * @summary List messages in a Forge app (conversation)
+ */
+export const getListForgeMessagesUrl = (id: number) => {
+  return `/api/forge/conversations/${id}/messages`;
+};
+
+export const listForgeMessages = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ForgeMessage[]> => {
+  return customFetch<ForgeMessage[]>(getListForgeMessagesUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListForgeMessagesQueryKey = (id: number) => {
+  return [`/api/forge/conversations/${id}/messages`] as const;
+};
+
+export const getListForgeMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listForgeMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listForgeMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListForgeMessagesQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listForgeMessages>>
+  > = ({ signal }) => listForgeMessages(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listForgeMessages>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListForgeMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listForgeMessages>>
+>;
+export type ListForgeMessagesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List messages in a Forge app (conversation)
+ */
+
+export function useListForgeMessages<
+  TData = Awaited<ReturnType<typeof listForgeMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listForgeMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListForgeMessagesQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Send a message to Forge and receive a streaming response
+ */
+export const getSendForgeMessageUrl = (id: number) => {
+  return `/api/forge/conversations/${id}/messages`;
+};
+
+export const sendForgeMessage = async (
+  id: number,
+  forgeMessageInput: ForgeMessageInput,
+  options?: RequestInit,
+): Promise<unknown> => {
+  return customFetch<unknown>(getSendForgeMessageUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(forgeMessageInput),
+  });
+};
+
+export const getSendForgeMessageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendForgeMessage>>,
+    TError,
+    { id: number; data: BodyType<ForgeMessageInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendForgeMessage>>,
+  TError,
+  { id: number; data: BodyType<ForgeMessageInput> },
+  TContext
+> => {
+  const mutationKey = ["sendForgeMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendForgeMessage>>,
+    { id: number; data: BodyType<ForgeMessageInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return sendForgeMessage(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendForgeMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendForgeMessage>>
+>;
+export type SendForgeMessageMutationBody = BodyType<ForgeMessageInput>;
+export type SendForgeMessageMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send a message to Forge and receive a streaming response
+ */
+export const useSendForgeMessage = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendForgeMessage>>,
+    TError,
+    { id: number; data: BodyType<ForgeMessageInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendForgeMessage>>,
+  TError,
+  { id: number; data: BodyType<ForgeMessageInput> },
+  TContext
+> => {
+  return useMutation(getSendForgeMessageMutationOptions(options));
 };

@@ -13,6 +13,8 @@ tags:
     description: Axis AI chat operations
   - name: cortex
     description: Cortex AI chat operations
+  - name: forge
+    description: Forge app-building chat operations
 paths:
   /healthz:
     get:
@@ -315,6 +317,150 @@ paths:
           description: SSE stream of assistant text chunks
           content:
             text/event-stream: {}
+  /forge/conversations:
+    get:
+      operationId: listForgeConversations
+      tags: [forge]
+      summary: List all Forge apps (conversations)
+      responses:
+        "200":
+          description: List of conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ForgeConversation"
+    post:
+      operationId: createForgeConversation
+      tags: [forge]
+      summary: Create a new Forge app (conversation)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgeConversationInput"
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgeConversation"
+  /forge/conversations/{id}:
+    get:
+      operationId: getForgeConversation
+      tags: [forge]
+      summary: Get Forge app (conversation) with messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversation with messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgeConversationWithMessages"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: renameForgeConversation
+      tags: [forge]
+      summary: Rename a Forge app (conversation)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationRenameInput"
+      responses:
+        "200":
+          description: Updated conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgeConversation"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteForgeConversation
+      tags: [forge]
+      summary: Delete a Forge app (conversation)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /forge/conversations/{id}/messages:
+    get:
+      operationId: listForgeMessages
+      tags: [forge]
+      summary: List messages in a Forge app (conversation)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ForgeMessage"
+    post:
+      operationId: sendForgeMessage
+      tags: [forge]
+      summary: Send a message to Forge and receive a streaming response
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgeMessageInput"
+      responses:
+        "200":
+          description: SSE stream of assistant text chunks
+          content:
+            text/event-stream: {}
 components:
   schemas:
     HealthStatus:
@@ -483,6 +629,73 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CortexMessage"
+      required:
+        - id
+        - title
+        - createdAt
+        - messages
+    ForgeConversation:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - createdAt
+    ForgeMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversationId:
+          type: integer
+        role:
+          type: string
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - conversationId
+        - role
+        - content
+        - createdAt
+    ForgeConversationInput:
+      type: object
+      properties:
+        title:
+          type: string
+      required:
+        - title
+    ForgeMessageInput:
+      type: object
+      properties:
+        content:
+          type: string
+      required:
+        - content
+    ForgeConversationWithMessages:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ForgeMessage"
       required:
         - id
         - title

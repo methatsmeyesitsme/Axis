@@ -81,3 +81,32 @@ export interface CortexConversationWithMessages {
   createdAt: string;
   messages: CortexMessage[];
 }
+
+export interface ForgeConversation {
+  id: number;
+  title: string;
+  createdAt: string;
+}
+
+export interface ForgeMessage {
+  id: number;
+  conversationId: number;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ForgeConversationInput {
+  title: string;
+}
+
+export interface ForgeMessageInput {
+  content: string;
+}
+
+export interface ForgeConversationWithMessages {
+  id: number;
+  title: string;
+  createdAt: string;
+  messages: ForgeMessage[];
+}

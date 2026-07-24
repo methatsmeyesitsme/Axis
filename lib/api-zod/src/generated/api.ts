@@ -206,3 +206,97 @@ export const SendCortexMessageParams = zod.object({
 export const SendCortexMessageBody = zod.object({
   content: zod.string(),
 });
+
+/**
+ * @summary List all Forge apps (conversations)
+ */
+export const ListForgeConversationsResponseItem = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListForgeConversationsResponse = zod.array(
+  ListForgeConversationsResponseItem,
+);
+
+/**
+ * @summary Create a new Forge app (conversation)
+ */
+export const CreateForgeConversationBody = zod.object({
+  title: zod.string(),
+});
+
+/**
+ * @summary Get Forge app (conversation) with messages
+ */
+export const GetForgeConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetForgeConversationResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
+  messages: zod.array(
+    zod.object({
+      id: zod.number(),
+      conversationId: zod.number(),
+      role: zod.string(),
+      content: zod.string(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Rename a Forge app (conversation)
+ */
+export const RenameForgeConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RenameForgeConversationBody = zod.object({
+  title: zod.string(),
+});
+
+export const RenameForgeConversationResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete a Forge app (conversation)
+ */
+export const DeleteForgeConversationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+/**
+ * @summary List messages in a Forge app (conversation)
+ */
+export const ListForgeMessagesParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ListForgeMessagesResponseItem = zod.object({
+  id: zod.number(),
+  conversationId: zod.number(),
+  role: zod.string(),
+  content: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListForgeMessagesResponse = zod.array(
+  ListForgeMessagesResponseItem,
+);
+
+/**
+ * @summary Send a message to Forge and receive a streaming response
+ */
+export const SendForgeMessageParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const SendForgeMessageBody = zod.object({
+  content: zod.string(),
+});
