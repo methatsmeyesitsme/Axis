@@ -12,7 +12,7 @@ import LanguageSelector from "./LanguageSelector";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown, Globe } from "lucide-react";
+import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown, ChevronLeft, Globe } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { AIThinkingRow } from "./AIStatusLabel";
@@ -22,6 +22,7 @@ interface ChatAreaProps {
   conversationId: number | null;
   onConversationCreated: (id: number) => void;
   onOpenAuth: () => void;
+  forgeHint?: boolean;
 }
 
 interface Attachment {
@@ -88,7 +89,7 @@ function buildSmartPrompt(userInput: string): { prompt: string; warning: string 
   return { prompt, warning };
 }
 
-export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth }: ChatAreaProps) {
+export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth, forgeHint }: ChatAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
@@ -557,7 +558,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   if (conversationId === null) {
     return (
-      <div className="flex-1 flex flex-col h-full bg-background">
+      <div className="flex-1 flex flex-col h-full bg-background relative">
+        {forgeHint && (
+          <span className="absolute top-4 right-6 flex items-center gap-1 text-xs text-muted-foreground/70 select-none">
+            <ChevronLeft className="w-3.5 h-3.5" />
+            Swipe left to build an app
+          </span>
+        )}
         <div className="text-center px-8 pt-10 pb-0">
           <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Code2 className="w-7 h-7 text-primary" />
@@ -590,6 +597,12 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
         {planMode && (
           <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-medium">
             Plan Mode
+          </span>
+        )}
+        {forgeHint && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground/70 select-none">
+            <ChevronLeft className="w-3.5 h-3.5" />
+            Swipe left to build an app
           </span>
         )}
       </div>

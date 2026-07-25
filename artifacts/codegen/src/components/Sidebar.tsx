@@ -7,10 +7,16 @@ import {
   useListCortexConversations,
   useDeleteCortexConversation,
   useRenameCortexConversation,
+  useListForgeConversations,
+  useCreateForgeConversation,
+  useDeleteForgeConversation,
+  useRenameForgeConversation,
   getListOpenaiConversationsQueryKey,
   getListCortexConversationsQueryKey,
+  getListForgeConversationsQueryKey,
   getGetOpenaiConversationQueryKey,
   getGetCortexConversationQueryKey,
+  getGetForgeConversationQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,16 +37,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, MessageSquare, Code2, Settings, Sparkles, MoreVertical, Pencil, Trash2 } from "lucide-react";
+import { Plus, MessageSquare, Code2, Settings, Sparkles, MoreVertical, Pencil, Trash2, Hammer } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
-type Tab = "codex" | "cortex";
+type Tab = "codex" | "cortex" | "forge";
+type ConvKind = "axis" | "cortex" | "forge";
 
 interface SidebarProps {
   activeConversationId: number | null;
   onSelectConversation: (id: number | null) => void;
   activeCortexConversationId: number | null;
   onSelectCortexConversation: (id: number | null) => void;
+  activeForgeConversationId: number | null;
+  onSelectForgeConversation: (id: number | null) => void;
   onOpenSettings: () => void;
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
@@ -50,6 +59,101 @@ interface ConvItem {
   id: number;
   title: string;
   subtitle?: string;
+}
+
+function AppTile({
+  app,
+  isActive,
+  onSelect,
+  onRename,
+  onDelete,
+}: {
+  app: ConvItem;
+  isActive: boolean;
+  onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const openMenu = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (rect) setMenuPos({ top: rect.bottom + 4, left: rect.right - 144 });
+    setMenuOpen((v) => !v);
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClose(e: MouseEvent) {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleClose);
+    return () => document.removeEventListener("mousedown", handleClose);
+  }, [menuOpen]);
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`relative aspect-square rounded-2xl cursor-pointer transition-colors flex flex-col items-center justify-center gap-1.5 p-2 ${
+        isActive ? "bg-primary/10 ring-2 ring-primary/40" : "bg-muted hover:bg-muted/70"
+      }`}
+    >
+      <div className="w-8 h-8 rounded-xl bg-primary/15 flex items-center justify-center">
+        <Hammer className="w-4 h-4 text-primary" />
+      </div>
+      <span className="text-xs font-medium text-foreground text-center leading-tight line-clamp-2 px-1">
+        {app.title || "New App"}
+      </span>
+
+      <button
+        ref={btnRef}
+        onClick={openMenu}
+        style={{
+          position: "absolute", right: 4, top: 4, display: "flex", alignItems: "center",
+          justifyContent: "center", width: 20, height: 20, borderRadius: 4, border: "none",
+          background: menuOpen ? "rgba(0,0,0,0.08)" : "transparent", cursor: "pointer", padding: 0,
+        }}
+        title="More options"
+      >
+        <MoreVertical style={{ width: 12, height: 12, color: "#6b7280" }} />
+      </button>
+
+      {menuOpen && createPortal(
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed", top: menuPos.top, left: menuPos.left, zIndex: 99999,
+            width: 144, borderRadius: 8, border: "1px solid #e5e7eb", background: "#ffffff",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.14)", padding: "4px 0",
+          }}
+        >
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onRename(); }}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", fontSize: 14, background: "transparent", border: "none", cursor: "pointer", textAlign: "left", color: "#111827" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          >
+            <Pencil style={{ width: 13, height: 13 }} />
+            Rename
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", fontSize: 14, background: "transparent", border: "none", cursor: "pointer", textAlign: "left", color: "#ef4444" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fef2f2"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          >
+            <Trash2 style={{ width: 13, height: 13 }} />
+            Delete
+          </button>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
 }
 
 function ConversationItem({
@@ -184,6 +288,8 @@ export default function Sidebar({
   onSelectConversation,
   activeCortexConversationId,
   onSelectCortexConversation,
+  activeForgeConversationId,
+  onSelectForgeConversation,
   onOpenSettings,
   activeTab,
   onTabChange,
@@ -192,20 +298,26 @@ export default function Sidebar({
 
   const { data: conversations = [], isLoading: axisLoading } = useListOpenaiConversations();
   const { data: cortexConversations = [], isLoading: cortexLoading } = useListCortexConversations();
+  const { data: forgeApps = [], isLoading: forgeLoading } = useListForgeConversations({
+    query: { enabled: activeTab === "forge", queryKey: getListForgeConversationsQueryKey() },
+  });
 
   const deleteAxisMutation = useDeleteOpenaiConversation();
   const deleteCortexMutation = useDeleteCortexConversation();
+  const deleteForgeMutation = useDeleteForgeConversation();
   const renameAxisMutation = useRenameOpenaiConversation();
   const renameCortexMutation = useRenameCortexConversation();
+  const renameForgeMutation = useRenameForgeConversation();
+  const createForgeMutation = useCreateForgeConversation();
 
   // Rename state
-  const [renameDialog, setRenameDialog] = useState<{ id: number; title: string; kind: "axis" | "cortex" } | null>(null);
+  const [renameDialog, setRenameDialog] = useState<{ id: number; title: string; kind: ConvKind } | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
   // Delete confirmation state
-  const [deleteDialog, setDeleteDialog] = useState<{ id: number; kind: "axis" | "cortex" } | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ id: number; kind: ConvKind } | null>(null);
 
-  const openRename = (id: number, title: string, kind: "axis" | "cortex") => {
+  const openRename = (id: number, title: string, kind: ConvKind) => {
     setRenameValue(title);
     setRenameDialog({ id, title, kind });
   };
@@ -220,18 +332,25 @@ export default function Sidebar({
           queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(id) });
         },
       });
-    } else {
+    } else if (kind === "cortex") {
       renameCortexMutation.mutate({ id, data: { title: renameValue.trim() } }, {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetCortexConversationQueryKey(id) });
         },
       });
+    } else {
+      renameForgeMutation.mutate({ id, data: { title: renameValue.trim() } }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetForgeConversationQueryKey(id) });
+        },
+      });
     }
     setRenameDialog(null);
   };
 
-  const openDelete = (id: number, kind: "axis" | "cortex") => {
+  const openDelete = (id: number, kind: ConvKind) => {
     setDeleteDialog({ id, kind });
   };
 
@@ -245,15 +364,28 @@ export default function Sidebar({
           if (activeConversationId === id) onSelectConversation(null);
         },
       });
-    } else {
+    } else if (kind === "cortex") {
       deleteCortexMutation.mutate({ id }, {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListCortexConversationsQueryKey() });
           if (activeCortexConversationId === id) onSelectCortexConversation(null);
         },
       });
+    } else {
+      deleteForgeMutation.mutate({ id }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
+          if (activeForgeConversationId === id) onSelectForgeConversation(null);
+        },
+      });
     }
     setDeleteDialog(null);
+  };
+
+  const handleNewApp = async () => {
+    const created = await createForgeMutation.mutateAsync({ data: { title: "New App" } });
+    queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
+    onSelectForgeConversation(created.id);
   };
 
   return (
@@ -261,46 +393,50 @@ export default function Sidebar({
       <div className="w-72 bg-sidebar border-r flex flex-col h-full flex-shrink-0">
         <div className="p-4 border-b flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary font-semibold text-lg">
-            {activeTab === "codex" ? "Axis" : "Cortex"}
+            {activeTab === "codex" ? "Axis" : activeTab === "cortex" ? "Cortex" : "Forge"}
           </div>
         </div>
 
-        <div className="px-3 pt-3 pb-1">
-          <div className="flex gap-1 bg-muted p-1 rounded-xl">
-            <button
-              onClick={() => onTabChange("codex")}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === "codex"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              Codex
-            </button>
-            <button
-              onClick={() => onTabChange("cortex")}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === "cortex"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Cortex
-            </button>
+        {activeTab !== "forge" && (
+          <div className="px-3 pt-3 pb-1">
+            <div className="flex gap-1 bg-muted p-1 rounded-xl">
+              <button
+                onClick={() => onTabChange("codex")}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === "codex"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+                Codex
+              </button>
+              <button
+                onClick={() => onTabChange("cortex")}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === "cortex"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Cortex
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="p-3 pt-2">
           <Button
             className="w-full justify-start gap-2 bg-primary hover:bg-primary/90 text-white font-medium shadow-sm"
-            onClick={() =>
-              activeTab === "codex" ? onSelectConversation(null) : onSelectCortexConversation(null)
-            }
+            onClick={() => {
+              if (activeTab === "codex") onSelectConversation(null);
+              else if (activeTab === "cortex") onSelectCortexConversation(null);
+              else handleNewApp();
+            }}
           >
             <Plus className="w-4 h-4" />
-            New Chat
+            {activeTab === "forge" ? "New App" : "New Chat"}
           </Button>
         </div>
 
@@ -325,7 +461,7 @@ export default function Sidebar({
               )}
             </div>
           </div>
-        ) : (
+        ) : activeTab === "cortex" ? (
           <div className="flex-1 overflow-y-auto px-3 min-h-0">
             <div className="space-y-1 pb-4">
               {cortexLoading ? (
@@ -344,6 +480,30 @@ export default function Sidebar({
                   />
                 ))
               )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto px-3 min-h-0">
+            {forgeLoading ? (
+              <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
+            ) : forgeApps.length === 0 ? (
+              <div className="px-2 py-8 text-sm text-muted-foreground text-center">No apps yet</div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5 pb-4">
+                {forgeApps.map((app) => (
+                  <AppTile
+                    key={app.id}
+                    app={{ id: app.id, title: app.title }}
+                    isActive={activeForgeConversationId === app.id}
+                    onSelect={() => onSelectForgeConversation(app.id)}
+                    onRename={() => openRename(app.id, app.title, "forge")}
+                    onDelete={() => openDelete(app.id, "forge")}
+                  />
+                ))}
+              </div>
+            )}
+            <div className="text-center text-xs text-muted-foreground/70 pb-2">
+              {forgeApps.length}/10 apps
             </div>
           </div>
         )}
