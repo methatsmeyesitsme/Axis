@@ -21,6 +21,12 @@ interface ForgeAreaProps {
   onOpenAuth: () => void;
 }
 
+interface ToolStep {
+  id: string;
+  summary: string;
+  status: "working" | "done" | "error";
+}
+
 export default function ForgeArea({ conversationId, onConversationCreated, onOpenAuth }: ForgeAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -31,6 +37,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [optimisticBaseline, setOptimisticBaseline] = useState(0);
+  const [toolSteps, setToolSteps] = useState<ToolStep[]>([]);
 
   const [guestMessages, setGuestMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
 
@@ -115,6 +122,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         const tid = finalizeTargetRef.current;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
+        setToolSteps([]);
         streamingJustFinishedRef.current = true;
         if (tid !== null && tid < 0) {
           const userMsg = guestPendingUserRef.current;
@@ -180,6 +188,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     finalizeTargetRef.current = targetId;
     prevMessagesLengthRef.current = serverMessages.length;
     setDisplayedContent("");
+    setToolSteps([]);
     setIsThinking(true);
     setIsStreaming(false);
 
@@ -220,6 +229,18 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
               charQueueRef.current += data.content as string;
               streamingContentRef.current += data.content as string;
             }
+            if (data.toolStart) {
+              const { id: toolId, summary } = data.toolStart as { id: string; summary: string };
+              setToolSteps((prev) => [...prev, { id: toolId, summary, status: "working" }]);
+            }
+            if (data.toolDone) {
+              const { id: toolId } = data.toolDone as { id: string; summary: string };
+              setToolSteps((prev) => prev.map((s) => (s.id === toolId ? { ...s, status: "done" } : s)));
+            }
+            if (data.toolError) {
+              const { id: toolId } = data.toolError as { id: string; summary: string; error: string };
+              setToolSteps((prev) => prev.map((s) => (s.id === toolId ? { ...s, status: "error" } : s)));
+            }
             if (data.error) {
               charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
               done = true;
@@ -242,6 +263,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         streamingJustFinishedRef.current = true;
         setIsStreaming(false);
         setOptimisticUserMessage(null);
+        setToolSteps([]);
         guestPendingUserRef.current = "";
         streamingContentRef.current = "";
         const tid = finalizeTargetRef.current;
@@ -260,7 +282,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
   };
 
   const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
-  const showBubble = isStreaming || displayedContent.length > 0;
+  const showBubble = isStreaming || displayedContent.length > 0 || toolSteps.length > 0;
 
   const composer = (placeholder: string) => (
     <div className="p-4 border-t bg-background shadow-sm shrink-0">
@@ -363,8 +385,28 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             )}
             {isThinking && <AIThinkingRow text="Working" />}
             {showBubble && (
-              <div ref={streamingBubbleRef} className="flex flex-col gap-0.5">
-                <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} />
+              <div ref={streamingBubbleRef} className="flex flex-col gap-2">
+                {toolSteps.length > 0 && (
+                  <div className="flex flex-col gap-1.5 pl-1">
+                    {toolSteps.map((step) => (
+                      <div key={step.id} className="flex items-center gap-2 text-xs">
+                        {step.status === "working" ? (
+                          <span className="w-3 h-3 rounded-full border-2 border-primary/30 border-t-primary animate-spin shrink-0" />
+                        ) : step.status === "error" ? (
+                          <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" />
+                        ) : (
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+                        )}
+                        <span className={step.status === "working" ? "text-muted-foreground" : "text-foreground"}>
+                          {step.status === "working" ? "Working" : step.summary}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(displayedContent.length > 0 || isStreaming) && (
+                  <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} />
+                )}
               </div>
             )}
           </div>
