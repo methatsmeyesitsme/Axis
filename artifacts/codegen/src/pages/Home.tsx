@@ -13,6 +13,17 @@ import { LogIn } from "lucide-react";
 
 type Tab = "codex" | "cortex" | "forge";
 
+interface DragState {
+  status: "idle" | "pending" | "dragging";
+  startX: number;
+  startY: number;
+  baseX: number;
+  lastX: number;
+  lastTime: number;
+  velocity: number;
+  pointerId: number | null;
+}
+
 export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [activeCortexConversationId, setActiveCortexConversationId] = useState<number | null>(null);
@@ -22,26 +33,21 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("codex");
   const { user, isLoading } = useAuth();
 
-  // Fully hand-rolled swipe (rather than relying on framer-motion's drag+animate
-  // composition, which turned out to fight itself and break swipe-right): `x` is
-  // a plain motion value in pixels that we drive ourselves, and the resting
-  // position after any drag is computed from a FRESH width measurement taken at
-  // that exact moment — never a value that could be stale.
-  const swipeContainerRef = useRef<HTMLDivElement>(null);
+  // Fully manual, low-level pointer-event swipe. Not using framer-motion's `drag`
+  // prop at all — that turned out to have gesture-recognition quirks that were
+  // hard to pin down (and framer's `drag` may not compose predictably inside
+  // wrapping webviews like Replit's mobile app shell). `x` is a plain pixel
+  // motion value we drive ourselves; listeners are attached natively with
+  // {passive:false} so preventDefault reliably stops native scroll during a
+  // horizontal drag — React's synthetic touch handlers are passive by default
+  // and can silently fail to do this, which is a classic source of exactly this
+  // kind of inconsistent, hard-to-reproduce swipe bug.
+  const swipeTrackRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
+  const activeTabRef = useRef<Tab>(activeTab);
+  activeTabRef.current = activeTab;
 
-  const getWidth = useCallback(() => swipeContainerRef.current?.offsetWidth ?? window.innerWidth, []);
-
-  // Only used for elastic drag resistance bounds — the actual snap target is
-  // always freshly measured (see snapTo/handleDragEnd), so staleness here can't
-  // cause a wrong resting position, only a slightly-off elastic feel at worst.
-  const [constraintWidth, setConstraintWidth] = useState(0);
-  useEffect(() => {
-    const update = () => setConstraintWidth(getWidth());
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [getWidth]);
+  const getWidth = useCallback(() => swipeTrackRef.current?.parentElement?.offsetWidth ?? window.innerWidth, []);
 
   useEffect(() => {
     if (!isLoading) {
@@ -51,27 +57,116 @@ export default function Home() {
     }
   }, [user, isLoading]);
 
-  // Velocity-based swipe: a fast flick crosses the threshold even with a small
-  // drag distance; a slow drag needs to cross further before it commits.
-  const handleDragEnd = useCallback(
-    (_e: unknown, info: { offset: { x: number }; velocity: { x: number } }) => {
-      const width = getWidth();
-      const distanceThreshold = width * 0.3;
-      const velocityThreshold = 450;
-      const { offset, velocity } = info;
+  useEffect(() => {
+    const el = swipeTrackRef.current;
+    if (!el) return;
 
-      let nextTab: Tab = activeTab;
-      if (activeTab === "codex" && (offset.x < -distanceThreshold || velocity.x < -velocityThreshold)) {
-        nextTab = "forge";
-      } else if (activeTab === "forge" && (offset.x > distanceThreshold || velocity.x > velocityThreshold)) {
-        nextTab = "codex";
+    const state: DragState = {
+      status: "idle",
+      startX: 0,
+      startY: 0,
+      baseX: 0,
+      lastX: 0,
+      lastTime: 0,
+      velocity: 0,
+      pointerId: null,
+    };
+
+    const snapTo = (nextTab: Tab) => {
+      const width = getWidth();
+      animateMotionValue(x, nextTab === "forge" ? -width : 0, { type: "spring", stiffness: 380, damping: 38 });
+      if (nextTab !== activeTabRef.current) setActiveTab(nextTab);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      state.status = "pending";
+      state.startX = e.clientX;
+      state.startY = e.clientY;
+      state.baseX = x.get();
+      state.lastX = e.clientX;
+      state.lastTime = performance.now();
+      state.velocity = 0;
+      state.pointerId = e.pointerId;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (state.status === "idle" || state.pointerId !== e.pointerId) return;
+      const dx = e.clientX - state.startX;
+      const dy = e.clientY - state.startY;
+
+      if (state.status === "pending") {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          // Vertical intent — this isn't a pane swipe, let native scroll handle it.
+          state.status = "idle";
+          return;
+        }
+        state.status = "dragging";
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
       }
 
-      animateMotionValue(x, nextTab === "forge" ? -width : 0, { type: "spring", stiffness: 380, damping: 38 });
-      if (nextTab !== activeTab) setActiveTab(nextTab);
-    },
-    [activeTab, getWidth, x]
-  );
+      if (state.status !== "dragging") return;
+
+      e.preventDefault();
+      const width = getWidth();
+      let newX = state.baseX + dx;
+      const min = -width;
+      const max = 0;
+      if (newX > max) newX = max + (newX - max) * 0.25;
+      if (newX < min) newX = min + (newX - min) * 0.25;
+      x.set(newX);
+
+      const now = performance.now();
+      const dt = now - state.lastTime;
+      if (dt > 0) state.velocity = ((e.clientX - state.lastX) / dt) * 1000;
+      state.lastX = e.clientX;
+      state.lastTime = now;
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (state.pointerId !== e.pointerId) return;
+      const wasDragging = state.status === "dragging";
+      state.status = "idle";
+      state.pointerId = null;
+      if (!wasDragging) return;
+
+      const width = getWidth();
+      const dx = e.clientX - state.startX;
+      const distanceThreshold = width * 0.3;
+      const velocityThreshold = 450;
+
+      let nextTab: Tab = activeTabRef.current;
+      if (activeTabRef.current === "codex" && (dx < -distanceThreshold || state.velocity < -velocityThreshold)) {
+        nextTab = "forge";
+      } else if (activeTabRef.current === "forge" && (dx > distanceThreshold || state.velocity > velocityThreshold)) {
+        nextTab = "codex";
+      }
+      snapTo(nextTab);
+    };
+
+    const onPointerCancel = () => {
+      if (state.status === "dragging") snapTo(activeTabRef.current);
+      state.status = "idle";
+      state.pointerId = null;
+    };
+
+    el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    el.addEventListener("pointermove", onPointerMove, { passive: false });
+    el.addEventListener("pointerup", onPointerUp, { passive: true });
+    el.addEventListener("pointercancel", onPointerCancel, { passive: true });
+
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [getWidth, x]);
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
@@ -110,18 +205,16 @@ export default function Home() {
         // Codex and Forge live together as one sliding strip: each "pane" is a full
         // row (its own sidebar + its own content), so swiping moves the whole thing
         // as a single smooth unit rather than the sidebar and content moving separately.
-        <div ref={swipeContainerRef} className="flex-1 relative overflow-hidden flex">
+        // min-w-0 here is critical: without it, a flex child won't shrink below its
+        // content's natural size, so overflow-hidden has nothing to actually clip —
+        // this was the real cause of both panes staying visible at once.
+        <div className="flex-1 relative overflow-hidden flex min-w-0">
           <motion.div
-            className="flex h-full"
+            ref={swipeTrackRef}
+            className="flex h-full shrink-0"
             style={{ width: "200%", touchAction: "pan-y", x }}
-            drag="x"
-            dragConstraints={{ left: -constraintWidth, right: 0 }}
-            dragElastic={0.08}
-            dragDirectionLock
-            dragMomentum={false}
-            onDragEnd={handleDragEnd}
           >
-            <div style={{ width: "50%" }} className="h-full shrink-0 flex">
+            <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
               <Sidebar
                 activeConversationId={activeConversationId}
                 onSelectConversation={setActiveConversationId}
@@ -153,7 +246,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div style={{ width: "50%" }} className="h-full shrink-0 flex">
+            <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
               <ForgeSidebar
                 activeForgeConversationId={activeForgeConversationId}
                 onSelectForgeConversation={setActiveForgeConversationId}
