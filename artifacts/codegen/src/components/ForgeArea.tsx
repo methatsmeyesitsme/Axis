@@ -370,7 +370,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
       </div>
 
       <div className="flex-1 relative overflow-hidden">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth" }}>
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-6" style={{ scrollBehavior: "smooth", touchAction: "pan-y" }}>
           <div className="max-w-4xl mx-auto space-y-6 pb-4">
             {isGuest
               ? guestMessages.map((msg, i) => (

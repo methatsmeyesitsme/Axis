@@ -208,7 +208,7 @@ export default function ForgeSidebar({
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 min-h-0">
+        <div className="flex-1 overflow-y-auto px-3 min-h-0" style={{ touchAction: "pan-y" }}>
           {forgeLoading ? (
             <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
           ) : forgeApps.length === 0 ? (

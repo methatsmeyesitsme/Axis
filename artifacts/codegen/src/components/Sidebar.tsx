@@ -303,7 +303,7 @@ export default function Sidebar({
         </div>
 
         {activeTab === "codex" ? (
-          <div className="flex-1 overflow-y-auto px-3 min-h-0">
+          <div className="flex-1 overflow-y-auto px-3 min-h-0" style={{ touchAction: "pan-y" }}>
             <div className="space-y-1 pb-4">
               {axisLoading ? (
                 <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>
@@ -324,7 +324,7 @@ export default function Sidebar({
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-3 min-h-0">
+          <div className="flex-1 overflow-y-auto px-3 min-h-0" style={{ touchAction: "pan-y" }}>
             <div className="space-y-1 pb-4">
               {cortexLoading ? (
                 <div className="px-2 py-4 text-sm text-muted-foreground text-center">Loading...</div>

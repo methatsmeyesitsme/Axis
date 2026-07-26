@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion } from "framer-motion";
+import { motion, useMotionValue, animate as animateMotionValue } from "framer-motion";
 import Sidebar from "@/components/Sidebar";
 import ForgeSidebar from "@/components/ForgeSidebar";
 import ChatArea from "@/components/ChatArea";
@@ -22,18 +22,26 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("codex");
   const { user, isLoading } = useAuth();
 
+  // Fully hand-rolled swipe (rather than relying on framer-motion's drag+animate
+  // composition, which turned out to fight itself and break swipe-right): `x` is
+  // a plain motion value in pixels that we drive ourselves, and the resting
+  // position after any drag is computed from a FRESH width measurement taken at
+  // that exact moment — never a value that could be stale.
   const swipeContainerRef = useRef<HTMLDivElement>(null);
-  const [paneWidth, setPaneWidth] = useState(0);
+  const x = useMotionValue(0);
 
+  const getWidth = useCallback(() => swipeContainerRef.current?.offsetWidth ?? window.innerWidth, []);
+
+  // Only used for elastic drag resistance bounds — the actual snap target is
+  // always freshly measured (see snapTo/handleDragEnd), so staleness here can't
+  // cause a wrong resting position, only a slightly-off elastic feel at worst.
+  const [constraintWidth, setConstraintWidth] = useState(0);
   useEffect(() => {
-    const el = swipeContainerRef.current;
-    if (!el) return;
-    const update = () => setPaneWidth(el.offsetWidth);
+    const update = () => setConstraintWidth(getWidth());
     update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [getWidth]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -47,21 +55,22 @@ export default function Home() {
   // drag distance; a slow drag needs to cross further before it commits.
   const handleDragEnd = useCallback(
     (_e: unknown, info: { offset: { x: number }; velocity: { x: number } }) => {
-      const { offset, velocity } = info;
-      const distanceThreshold = paneWidth * 0.3;
+      const width = getWidth();
+      const distanceThreshold = width * 0.3;
       const velocityThreshold = 450;
+      const { offset, velocity } = info;
 
-      if (activeTab === "codex") {
-        if (offset.x < -distanceThreshold || velocity.x < -velocityThreshold) {
-          setActiveTab("forge");
-        }
-      } else if (activeTab === "forge") {
-        if (offset.x > distanceThreshold || velocity.x > velocityThreshold) {
-          setActiveTab("codex");
-        }
+      let nextTab: Tab = activeTab;
+      if (activeTab === "codex" && (offset.x < -distanceThreshold || velocity.x < -velocityThreshold)) {
+        nextTab = "forge";
+      } else if (activeTab === "forge" && (offset.x > distanceThreshold || velocity.x > velocityThreshold)) {
+        nextTab = "codex";
       }
+
+      animateMotionValue(x, nextTab === "forge" ? -width : 0, { type: "spring", stiffness: 380, damping: 38 });
+      if (nextTab !== activeTab) setActiveTab(nextTab);
     },
-    [activeTab, paneWidth]
+    [activeTab, getWidth, x]
   );
 
   return (
@@ -104,13 +113,12 @@ export default function Home() {
         <div ref={swipeContainerRef} className="flex-1 relative overflow-hidden flex">
           <motion.div
             className="flex h-full"
-            style={{ width: "200%", touchAction: "pan-y" }}
+            style={{ width: "200%", touchAction: "pan-y", x }}
             drag="x"
-            dragConstraints={{ left: -paneWidth, right: 0 }}
+            dragConstraints={{ left: -constraintWidth, right: 0 }}
             dragElastic={0.08}
             dragDirectionLock
-            animate={{ x: activeTab === "forge" ? -paneWidth : 0 }}
-            transition={{ type: "spring", stiffness: 380, damping: 38 }}
+            dragMomentum={false}
             onDragEnd={handleDragEnd}
           >
             <div style={{ width: "50%" }} className="h-full shrink-0 flex">
