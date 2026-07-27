@@ -143,23 +143,41 @@ export default function Home() {
     };
 
     // ── Touch (primary — mobile) ──────────────────────────────────────────
+    let lastTouchTime = 0;
     const onTouchStart = (e: TouchEvent) => {
+      lastTouchTime = Date.now();
       if (e.touches.length !== 1) return;
       beginDrag(e.touches[0].clientX, e.touches[0].clientY);
     };
     const onTouchMove = (e: TouchEvent) => {
+      lastTouchTime = Date.now();
       if (e.touches.length !== 1) return;
       moveDrag(e.touches[0].clientX, e.touches[0].clientY, e);
     };
-    const onTouchEnd = () => endDrag();
+    const onTouchEnd = () => {
+      lastTouchTime = Date.now();
+      endDrag();
+    };
     const onTouchCancel = () => {
+      lastTouchTime = Date.now();
       if (state.status === "dragging") snapTo(activeTabRef.current);
       state.status = "idle";
     };
 
     // ── Mouse (desktop/testing) ───────────────────────────────────────────
+    // Mobile browsers fire synthetic "ghost" mouse events (mousedown/move/up)
+    // shortly after a real touch gesture, for compatibility with old sites
+    // that only listen for mouse events. Without guarding against these, a
+    // real touch swipe gets processed correctly, then a synthetic mouse
+    // sequence fires moments later with near-zero elapsed time (and thus an
+    // artificially huge computed velocity), occasionally flipping the tab
+    // back before a real re-render corrects it — exactly the "swipes,
+    // teleports back, swipes again" glitch. Ignoring mouse events shortly
+    // after any touch activity fixes this.
     let mouseActive = false;
+    const GHOST_EVENT_GUARD_MS = 800;
     const onMouseDown = (e: MouseEvent) => {
+      if (Date.now() - lastTouchTime < GHOST_EVENT_GUARD_MS) return;
       if (e.button !== 0) return;
       mouseActive = true;
       beginDrag(e.clientX, e.clientY);
