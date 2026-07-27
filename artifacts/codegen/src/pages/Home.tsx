@@ -21,7 +21,6 @@ interface DragState {
   lastX: number;
   lastTime: number;
   velocity: number;
-  pointerId: number | null;
 }
 
 export default function Home() {
@@ -33,21 +32,31 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("codex");
   const { user, isLoading } = useAuth();
 
-  // Fully manual, low-level pointer-event swipe. Not using framer-motion's `drag`
-  // prop at all — that turned out to have gesture-recognition quirks that were
-  // hard to pin down (and framer's `drag` may not compose predictably inside
-  // wrapping webviews like Replit's mobile app shell). `x` is a plain pixel
-  // motion value we drive ourselves; listeners are attached natively with
-  // {passive:false} so preventDefault reliably stops native scroll during a
-  // horizontal drag — React's synthetic touch handlers are passive by default
-  // and can silently fail to do this, which is a classic source of exactly this
-  // kind of inconsistent, hard-to-reproduce swipe bug.
+  // Fully manual swipe using raw Touch Events (+ mouse events for desktop),
+  // not the Pointer Events API and not framer-motion's `drag` prop. Touch
+  // Events are the older, far more consistently-supported API across mobile
+  // WebViews (including WebKit/iOS) — Pointer Events, while the modern
+  // standard, have historically had less reliable support in some embedded
+  // webviews, which is the likely reason swipe worked in Chromium-based
+  // testing but not in Replit's actual mobile app shell. `x` is a plain pixel
+  // motion value driven directly; listeners are attached natively with
+  // {passive:false} on touchmove so preventDefault reliably stops native
+  // scroll during a horizontal drag.
   const swipeTrackRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const activeTabRef = useRef<Tab>(activeTab);
   activeTabRef.current = activeTab;
 
   const getWidth = useCallback(() => swipeTrackRef.current?.parentElement?.offsetWidth ?? window.innerWidth, []);
+
+  const snapTo = useCallback(
+    (nextTab: Tab) => {
+      const width = getWidth();
+      animateMotionValue(x, nextTab === "forge" ? -width : 0, { type: "spring", stiffness: 380, damping: 38 });
+      if (nextTab !== activeTabRef.current) setActiveTab(nextTab);
+    },
+    [getWidth, x]
+  );
 
   useEffect(() => {
     if (!isLoading) {
@@ -69,31 +78,22 @@ export default function Home() {
       lastX: 0,
       lastTime: 0,
       velocity: 0,
-      pointerId: null,
     };
 
-    const snapTo = (nextTab: Tab) => {
-      const width = getWidth();
-      animateMotionValue(x, nextTab === "forge" ? -width : 0, { type: "spring", stiffness: 380, damping: 38 });
-      if (nextTab !== activeTabRef.current) setActiveTab(nextTab);
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (e.pointerType === "mouse" && e.button !== 0) return;
+    const beginDrag = (clientX: number, clientY: number) => {
       state.status = "pending";
-      state.startX = e.clientX;
-      state.startY = e.clientY;
+      state.startX = clientX;
+      state.startY = clientY;
       state.baseX = x.get();
-      state.lastX = e.clientX;
+      state.lastX = clientX;
       state.lastTime = performance.now();
       state.velocity = 0;
-      state.pointerId = e.pointerId;
     };
 
-    const onPointerMove = (e: PointerEvent) => {
-      if (state.status === "idle" || state.pointerId !== e.pointerId) return;
-      const dx = e.clientX - state.startX;
-      const dy = e.clientY - state.startY;
+    const moveDrag = (clientX: number, clientY: number, evt: TouchEvent | MouseEvent) => {
+      if (state.status === "idle") return;
+      const dx = clientX - state.startX;
+      const dy = clientY - state.startY;
 
       if (state.status === "pending") {
         if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
@@ -103,16 +103,11 @@ export default function Home() {
           return;
         }
         state.status = "dragging";
-        try {
-          el.setPointerCapture(e.pointerId);
-        } catch {
-          /* ignore */
-        }
       }
 
       if (state.status !== "dragging") return;
 
-      e.preventDefault();
+      if (evt.cancelable) evt.preventDefault();
       const width = getWidth();
       let newX = state.baseX + dx;
       const min = -width;
@@ -123,20 +118,18 @@ export default function Home() {
 
       const now = performance.now();
       const dt = now - state.lastTime;
-      if (dt > 0) state.velocity = ((e.clientX - state.lastX) / dt) * 1000;
-      state.lastX = e.clientX;
+      if (dt > 0) state.velocity = ((clientX - state.lastX) / dt) * 1000;
+      state.lastX = clientX;
       state.lastTime = now;
     };
 
-    const onPointerUp = (e: PointerEvent) => {
-      if (state.pointerId !== e.pointerId) return;
+    const endDrag = () => {
       const wasDragging = state.status === "dragging";
       state.status = "idle";
-      state.pointerId = null;
       if (!wasDragging) return;
 
       const width = getWidth();
-      const dx = e.clientX - state.startX;
+      const dx = state.lastX - state.startX;
       const distanceThreshold = width * 0.3;
       const velocityThreshold = 450;
 
@@ -149,24 +142,56 @@ export default function Home() {
       snapTo(nextTab);
     };
 
-    const onPointerCancel = () => {
+    // ── Touch (primary — mobile) ──────────────────────────────────────────
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      beginDrag(e.touches[0].clientX, e.touches[0].clientY);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      moveDrag(e.touches[0].clientX, e.touches[0].clientY, e);
+    };
+    const onTouchEnd = () => endDrag();
+    const onTouchCancel = () => {
       if (state.status === "dragging") snapTo(activeTabRef.current);
       state.status = "idle";
-      state.pointerId = null;
     };
 
-    el.addEventListener("pointerdown", onPointerDown, { passive: true });
-    el.addEventListener("pointermove", onPointerMove, { passive: false });
-    el.addEventListener("pointerup", onPointerUp, { passive: true });
-    el.addEventListener("pointercancel", onPointerCancel, { passive: true });
+    // ── Mouse (desktop/testing) ───────────────────────────────────────────
+    let mouseActive = false;
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      mouseActive = true;
+      beginDrag(e.clientX, e.clientY);
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!mouseActive) return;
+      moveDrag(e.clientX, e.clientY, e);
+    };
+    const onMouseUp = () => {
+      if (!mouseActive) return;
+      mouseActive = false;
+      endDrag();
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    el.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
 
     return () => {
-      el.removeEventListener("pointerdown", onPointerDown);
-      el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", onPointerUp);
-      el.removeEventListener("pointercancel", onPointerCancel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchCancel);
+      el.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [getWidth, x]);
+  }, [getWidth, x, snapTo]);
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
@@ -242,6 +267,7 @@ export default function Home() {
                   onConversationCreated={(id) => setActiveConversationId(id)}
                   onOpenAuth={() => setShowAuth(true)}
                   forgeHint
+                  onOpenForge={() => snapTo("forge")}
                 />
               </div>
             </div>

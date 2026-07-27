@@ -23,6 +23,7 @@ interface ChatAreaProps {
   onConversationCreated: (id: number) => void;
   onOpenAuth: () => void;
   forgeHint?: boolean;
+  onOpenForge?: () => void;
 }
 
 interface Attachment {
@@ -89,7 +90,7 @@ function buildSmartPrompt(userInput: string): { prompt: string; warning: string 
   return { prompt, warning };
 }
 
-export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth, forgeHint }: ChatAreaProps) {
+export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth, forgeHint, onOpenForge }: ChatAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
@@ -560,10 +561,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     return (
       <div className="flex-1 flex flex-col h-full bg-background relative">
         {forgeHint && (
-          <span className="absolute top-4 right-6 flex items-center gap-1 text-xs text-muted-foreground/70 select-none">
+          <button
+            onClick={onOpenForge}
+            className="absolute top-14 right-6 flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-primary transition-colors z-10"
+          >
             <ChevronLeft className="w-3.5 h-3.5" />
             Swipe left to build an app
-          </span>
+          </button>
         )}
         <div className="text-center px-8 pt-10 pb-0">
           <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -600,10 +604,13 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           </span>
         )}
         {forgeHint && (
-          <span className="flex items-center gap-1 text-xs text-muted-foreground/70 select-none">
+          <button
+            onClick={onOpenForge}
+            className="flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-primary transition-colors relative z-20 mr-24"
+          >
             <ChevronLeft className="w-3.5 h-3.5" />
             Swipe left to build an app
-          </span>
+          </button>
         )}
       </div>
 
