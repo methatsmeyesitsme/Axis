@@ -1,6 +1,7 @@
 import { db, forgeAppFiles, forgeAppData, forgeAppTables, forgeAppTableRows } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import type { FunctionDeclaration } from "@google/genai";
+import { saveBackendHandler } from "./forge-handler-storage";
 
 // Every tool requires a `summary` argument: a concise, past-tense description of
 // what this call does, 8 words max. The model provides it; we enforce the cap
@@ -147,6 +148,25 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "write_backend_handler",
+    description:
+      "Define real, executable backend logic for a route (e.g. POST /checkout). The code runs server-side in a sandbox with access to `req` (method, route, query, body) and `db` (get/set/delete/list, insert/select/update/deleteRows). It must `return { status, body }`.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        method: { type: "string", description: "HTTP method, e.g. GET, POST, PUT, DELETE" },
+        route: { type: "string", description: "Route path, e.g. /checkout or /todos/:id" },
+        code: {
+          type: "string",
+          description:
+            "JavaScript statements (async allowed) using `req` and `db`, ending with `return { status: 200, body: ... }`",
+        },
+        ...summaryProp,
+      },
+      required: ["method", "route", "code", "summary"],
+    },
+  },
+  {
     name: "add_accounts",
     description: "Add sign-up/login accounts to the app. NOTE: not yet available — calling this just informs the user it's coming soon.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
@@ -276,6 +296,14 @@ export async function executeForgeTool(
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
         await db.delete(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
         return { output: "ok" };
+      }
+      case "write_backend_handler": {
+        const method = String(rawArgs.method ?? "").toUpperCase();
+        const route = String(rawArgs.route ?? "");
+        const code = String(rawArgs.code ?? "");
+        if (!method || !route || !code) return { error: "method, route, and code are all required" };
+        await saveBackendHandler(appId, method, route, code);
+        return { output: `Defined ${method} ${route}` };
       }
       case "add_accounts":
         return { output: "Account support isn't available yet — it's coming in a later update." };
