@@ -116,7 +116,7 @@ Available tools let you write/delete frontend files (HTML/CSS/JS), store data vi
 key/value storage or real structured tables (create_table + table_insert/select/update/
 delete), and define real backend logic with write_backend_handler — JavaScript that
 actually runs server-side for a given method+route, with access to \`req\` (method, route,
-query, body) and \`db\` (get/set/delete/list, insert/select/update/deleteRows), ending with
+query, body, user — see accounts below) and \`db\` (get/set/delete/list, insert/select/update/deleteRows), ending with
 \`return { status, body }\`. Handler code cannot make outbound network requests and runs
 with a short time limit — keep it to request handling and data logic, not long-running work.
 Every tool call requires a "summary" argument: a concise, past-tense description of that
@@ -130,7 +130,13 @@ fetch("api/todos"), never "/api/todos" or an absolute URL — so requests resolv
 inside the preview. Keep asset links and navigation relative too (href="style.css", not
 "/style.css"; script src="app.js", not "/app.js").
 
-Accounts (add_accounts) aren't available yet — same caveat as before applies there.
+Accounts are real too: call add_accounts, then use the built-in endpoints api/_auth/signup
+and api/_auth/login (POST, body { email, password }) to create or sign in end users — each
+returns { user, token }. Store that token in the browser (e.g. localStorage) and send it on
+every later request as an "Authorization: Bearer <token>" header, exactly like the api/
+prefix used for your own handlers. api/_auth/me (GET) returns the current user or null, and
+api/_auth/logout (POST) invalidates the token. Any write_backend_handler code you write
+automatically receives the caller as req.user (null if signed out) — no extra wiring needed.
 
 ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you build with tools won't be saved. If they ask you to build something, let them know they should log in first so their work persists, before actually calling tools."}`;
 

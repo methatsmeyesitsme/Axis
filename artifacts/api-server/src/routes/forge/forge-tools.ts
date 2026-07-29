@@ -168,7 +168,8 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "add_accounts",
-    description: "Add sign-up/login accounts to the app. NOTE: not yet available — calling this just informs the user it's coming soon.",
+    description:
+      "Enable sign-up/login accounts for the app's end users. Adds built-in endpoints (api/_auth/signup, api/_auth/login, api/_auth/logout, api/_auth/me) and makes the signed-in user available to write_backend_handler code as req.user.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
   },
   {
@@ -307,7 +308,10 @@ export async function executeForgeTool(
         return { output: `Defined ${method} ${route}` };
       }
       case "add_accounts":
-        return { output: "Account support isn't available yet — it's coming in a later update." };
+        return {
+          output:
+            "Accounts are enabled. POST api/_auth/signup and api/_auth/login (body: { email, password }) each return { user, token } — store that token client-side (e.g. localStorage) and send it as an 'Authorization: Bearer <token>' header on later requests. GET api/_auth/me returns the current user or null; POST api/_auth/logout invalidates the token. Any write_backend_handler code automatically receives the caller as req.user (null if signed out).",
+        };
       case "run_preview": {
         const [entry] = await db
           .select()

@@ -9,6 +9,7 @@ interface SandboxRequest {
   route: string;
   query: Record<string, string>;
   body: unknown;
+  user?: { id: number; email: string } | null;
 }
 
 interface SandboxResult {
@@ -70,7 +71,7 @@ export async function executeBackendHandler(appId: number, req: SandboxRequest):
   // setTimeout/setInterval (could be used to dodge the timeout), fetch, or
   // filesystem access of any kind.
   const sandboxGlobals: Record<string, unknown> = {
-    req: { method: req.method, route: req.route, query: req.query, body: req.body },
+    req: { method: req.method, route: req.route, query: req.query, body: req.body, user: req.user ?? null },
     db: sandboxDb,
     console: sandboxConsole,
     Promise,

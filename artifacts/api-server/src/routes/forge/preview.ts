@@ -1,7 +1,8 @@
-import { Router, type IRouter, type Response } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { db, conversations, forgeAppFiles } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { executeBackendHandler } from "./sandbox";
+import { signup, login, getSessionUser, destroySession } from "./forge-accounts";
 
 const router: IRouter = Router();
 
@@ -70,6 +71,53 @@ async function serveFile(id: number, path: string, res: Response): Promise<void>
   res.send(file.content);
 }
 
+function extractBearerToken(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : undefined;
+}
+
+// Built-in account endpoints, reserved under "_auth/" so they can't collide
+// with routes an app author defines with write_backend_handler. Handled here
+// directly rather than via the sandbox, since they touch real credentials.
+async function handleAuthRoute(
+  appId: number,
+  route: string,
+  req: Request,
+  res: Response,
+  token: string | undefined,
+): Promise<void> {
+  const body = (req.body ?? {}) as { email?: unknown; password?: unknown };
+
+  if (route === "/_auth/signup" && req.method === "POST") {
+    const result = await signup(appId, String(body.email ?? ""), String(body.password ?? ""));
+    if ("error" in result) { res.status(400).json({ error: result.error }); return; }
+    res.status(201).json(result);
+    return;
+  }
+
+  if (route === "/_auth/login" && req.method === "POST") {
+    const result = await login(appId, String(body.email ?? ""), String(body.password ?? ""));
+    if ("error" in result) { res.status(401).json({ error: result.error }); return; }
+    res.status(200).json(result);
+    return;
+  }
+
+  if (route === "/_auth/logout" && req.method === "POST") {
+    await destroySession(token);
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (route === "/_auth/me" && req.method === "GET") {
+    const user = await getSessionUser(appId, token);
+    res.status(200).json({ user });
+    return;
+  }
+
+  res.status(404).json({ error: "Unknown auth route" });
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 // No trailing slash: redirect to one. A trailing slash keeps the app's own
@@ -96,11 +144,20 @@ router.all("/:id/api/*splat", async (req, res) => {
   }
 
   const route = "/" + joinSplat((req.params as Record<string, unknown>).splat);
+  const token = extractBearerToken(req.headers.authorization);
+
+  if (route.startsWith("/_auth/")) {
+    await handleAuthRoute(id, route, req, res, token);
+    return;
+  }
+
+  const user = await getSessionUser(id, token);
   const result = await executeBackendHandler(id, {
     method: req.method,
     route,
     query: req.query as Record<string, string>,
     body: req.body,
+    user,
   });
   res.status(result.status).json(result.body);
 });
