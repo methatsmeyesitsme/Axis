@@ -55,6 +55,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
   const guestPendingUserRef = useRef<string>("");
 
   const isGuest = conversationId !== null && conversationId < 0;
+  const canPreview = conversationId !== null && conversationId > 0;
 
   const { data: conversation } = useGetForgeConversation(conversationId!, {
     query: { enabled: conversationId !== null && conversationId > 0, queryKey: getGetForgeConversationQueryKey(conversationId!) },
@@ -281,6 +282,11 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
+  const handleRunPreview = () => {
+    if (!canPreview) return;
+    window.open(`/api/forge/preview/${conversationId}/`, "_blank", "noopener,noreferrer");
+  };
+
   const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
   const showBubble = isStreaming || displayedContent.length > 0 || toolSteps.length > 0;
 
@@ -326,12 +332,17 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             </Button>
           </div>
         </div>
-        {/* Run button — placement matches the final design; wired up to actually
-            build & preview the app in a later phase, once execution exists. */}
+        {/* Run button — opens a live preview of the app's generated files/backend
+            handlers in a new tab, served by the api-server's /forge/preview route. */}
         <button
-          disabled
-          title="Coming soon — building and running apps is a later step in this feature"
-          className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-muted text-muted-foreground cursor-not-allowed"
+          onClick={handleRunPreview}
+          disabled={!canPreview}
+          title={canPreview ? "Open a live preview of this app in a new tab" : "Log in and start building to preview your app"}
+          className={`w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            canPreview
+              ? "bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
+              : "bg-muted text-muted-foreground cursor-not-allowed"
+          }`}
         >
           <Play className="w-3.5 h-3.5" />
           Run

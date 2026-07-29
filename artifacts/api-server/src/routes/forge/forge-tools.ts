@@ -173,7 +173,8 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "run_preview",
-    description: "Signal that the app is ready to preview. NOTE: not yet available — calling this just informs the user it's coming soon.",
+    description:
+      "Check whether the app is ready to preview (i.e. an index.html exists) and confirm its live preview is available. The user can open it with the Run button in the UI.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
   },
 ];
@@ -307,8 +308,16 @@ export async function executeForgeTool(
       }
       case "add_accounts":
         return { output: "Account support isn't available yet — it's coming in a later update." };
-      case "run_preview":
-        return { output: "Running/previewing apps isn't available yet — it's coming in a later update." };
+      case "run_preview": {
+        const [entry] = await db
+          .select()
+          .from(forgeAppFiles)
+          .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
+        if (!entry) {
+          return { error: "No index.html yet — write one with write_file before previewing." };
+        }
+        return { output: "Preview is ready. The user can open it with the Run button." };
+      }
       default:
         return { error: `Unknown tool: ${name}` };
     }
