@@ -3,7 +3,7 @@ import { db, conversations, messages } from "@workspace/db";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { forgeToolDeclarations, executeForgeTool, truncateSummary } from "./forge-tools";
-import type { FunctionCall } from "@google/genai";
+import { FunctionCallingConfigMode, type FunctionCall } from "@google/genai";
 
 const router: IRouter = Router();
 
@@ -169,6 +169,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   let lastToolError: string | null = null;
   let endedNaturally = false;
   let nudgeCount = 0;
+  let forceToolCall = false;
 
   try {
     let turnsRemaining = 8; // guard against runaway tool loops
@@ -180,8 +181,12 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
         config: {
           systemInstruction: systemPrompt,
           tools: [{ functionDeclarations: forgeToolDeclarations }],
+          ...(forceToolCall
+            ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.ANY } } }
+            : {}),
         },
       });
+      forceToolCall = false; // only ever applies to the one turn it was set for
 
       const turnFunctionCalls: FunctionCall[] = [];
       let turnText = "";
@@ -201,13 +206,15 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
 
       if (turnFunctionCalls.length === 0) {
         // Guard against the model describing an action ("I'll now build...")
-        // without ever calling the tool for it — nudge it to actually follow
-        // through instead of silently treating that as a finished turn. Bounded
-        // by turnsRemaining regardless, so this can't loop forever; a fixed cap
-        // of 1 wasn't enough in practice, so allow a few attempts.
+        // without ever calling the tool for it. A text-only nudge wasn't
+        // reliable enough on its own — this now also forces the very next
+        // call to emit an actual function call (mode: ANY), so it structurally
+        // cannot respond with more narration a second time in a row. Still
+        // bounded by turnsRemaining and a nudge cap, so this can't loop forever.
         const soundsUnfinished = /\b(i'll|i will|let me|going to|proceed (to|with))\b/i.test(turnText);
         if (soundsUnfinished && nudgeCount < 3 && turnsRemaining > 0) {
           nudgeCount++;
+          forceToolCall = true;
           chatMessages.push({ role: "model", parts: [{ text: turnText }] });
           chatMessages.push({
             role: "user",
