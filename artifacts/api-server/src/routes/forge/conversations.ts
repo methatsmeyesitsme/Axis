@@ -168,7 +168,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   let savedContent = "";
   let lastToolError: string | null = null;
   let endedNaturally = false;
-  let nudgedOnce = false;
+  let nudgeCount = 0;
 
   try {
     let turnsRemaining = 8; // guard against runaway tool loops
@@ -202,14 +202,21 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
       if (turnFunctionCalls.length === 0) {
         // Guard against the model describing an action ("I'll now build...")
         // without ever calling the tool for it — nudge it to actually follow
-        // through, once, instead of silently treating that as a finished turn.
+        // through instead of silently treating that as a finished turn. Bounded
+        // by turnsRemaining regardless, so this can't loop forever; a fixed cap
+        // of 1 wasn't enough in practice, so allow a few attempts.
         const soundsUnfinished = /\b(i'll|i will|let me|going to|proceed (to|with))\b/i.test(turnText);
-        if (soundsUnfinished && !nudgedOnce && turnsRemaining > 0) {
-          nudgedOnce = true;
+        if (soundsUnfinished && nudgeCount < 3 && turnsRemaining > 0) {
+          nudgeCount++;
           chatMessages.push({ role: "model", parts: [{ text: turnText }] });
           chatMessages.push({
             role: "user",
-            parts: [{ text: "You described an action but didn't call any tools for it. Call the necessary tool(s) now to actually do it." }],
+            parts: [{
+              text:
+                nudgeCount === 1
+                  ? "You described an action but didn't call any tools for it. Call the necessary tool(s) now to actually do it."
+                  : "You're still only describing what you'll do instead of doing it. Stop narrating and call the tool(s) for your very next sentence right now, in this response.",
+            }],
           });
           continue;
         }
