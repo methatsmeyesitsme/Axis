@@ -122,6 +122,11 @@ with a short time limit — keep it to request handling and data logic, not long
 Every tool call requires a "summary" argument: a concise, past-tense description of that
 single action, 8 words maximum (e.g. "Created login page and styles").
 
+If a tool call fails, its error message is passed back to you — always relay that exact
+text to the user (e.g. in a short code block), never paraphrase it into something vague
+like "a database error occurred." The specific message is the only way anyone can diagnose
+what actually went wrong.
+
 Apps can now be run for real. Once you've written an index.html with write_file, call
 run_preview to confirm it's ready, then tell the user to hit the Run button to open it.
 Inside the app's own HTML/JS, call any backend handlers you define with
@@ -209,6 +214,10 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
         const result = isPersisted
           ? await executeForgeTool(id, call.name ?? "", args)
           : { error: "This person isn't logged in yet, so building can't be saved. Ask them to log in first." };
+
+        if (result.error) {
+          req.log.error({ tool: call.name, args, error: result.error }, "[Forge] Tool execution failed");
+        }
 
         if (!res.writableEnded) {
           if (result.error) {
