@@ -160,6 +160,8 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   res.flushHeaders();
 
   let savedContent = "";
+  let lastToolError: string | null = null;
+  let endedNaturally = false;
 
   try {
     let turnsRemaining = 8; // guard against runaway tool loops
@@ -189,6 +191,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
       }
 
       if (turnFunctionCalls.length === 0) {
+        endedNaturally = true;
         break; // model produced a final text response, no more tool calls — done
       }
 
@@ -216,6 +219,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
           : { error: "This person isn't logged in yet, so building can't be saved. Ask them to log in first." };
 
         if (result.error) {
+          lastToolError = result.error;
           req.log.error({ tool: call.name, args, error: result.error }, "[Forge] Tool execution failed");
         }
 
@@ -233,6 +237,16 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
       }
 
       chatMessages.push({ role: "user", parts: functionResponseParts });
+    }
+
+    if (!endedNaturally) {
+      const fallback = `\n\nI wasn't able to finish — tool calls kept failing${
+        lastToolError ? `, most recently with:\n\n\`${lastToolError}\`` : ""
+      }. Please try again, and if this keeps happening, let the person building this know.`;
+      savedContent += fallback;
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
+      }
     }
 
     if (isPersisted && savedContent) {
