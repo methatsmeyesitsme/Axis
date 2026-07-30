@@ -168,6 +168,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   let savedContent = "";
   let lastToolError: string | null = null;
   let endedNaturally = false;
+  let nudgedOnce = false;
 
   try {
     let turnsRemaining = 8; // guard against runaway tool loops
@@ -183,10 +184,12 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
       });
 
       const turnFunctionCalls: FunctionCall[] = [];
+      let turnText = "";
 
       for await (const chunk of stream) {
         const text = chunk.text;
         if (text) {
+          turnText += text;
           savedContent += text;
           if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
@@ -197,6 +200,19 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
       }
 
       if (turnFunctionCalls.length === 0) {
+        // Guard against the model describing an action ("I'll now build...")
+        // without ever calling the tool for it — nudge it to actually follow
+        // through, once, instead of silently treating that as a finished turn.
+        const soundsUnfinished = /\b(i'll|i will|let me|going to|proceed (to|with))\b/i.test(turnText);
+        if (soundsUnfinished && !nudgedOnce && turnsRemaining > 0) {
+          nudgedOnce = true;
+          chatMessages.push({ role: "model", parts: [{ text: turnText }] });
+          chatMessages.push({
+            role: "user",
+            parts: [{ text: "You described an action but didn't call any tools for it. Call the necessary tool(s) now to actually do it." }],
+          });
+          continue;
+        }
         endedNaturally = true;
         break; // model produced a final text response, no more tool calls — done
       }
@@ -228,6 +244,8 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
           lastToolError = result.error;
           req.log.error({ tool: call.name, args, error: result.error }, "[Forge] Tool execution failed");
         }
+
+        savedContent += result.error ? `\n\n✗ ${summary} — ${result.error}` : `\n\n✓ ${summary}`;
 
         if (!res.writableEnded) {
           if (result.error) {
