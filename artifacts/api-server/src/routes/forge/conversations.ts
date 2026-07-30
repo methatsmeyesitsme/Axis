@@ -127,6 +127,12 @@ text to the user (e.g. in a short code block), never paraphrase it into somethin
 like "a database error occurred." The specific message is the only way anyone can diagnose
 what actually went wrong.
 
+Never end your turn on a sentence describing what you're about to do next ("I'll now...",
+"I will proceed to...") without actually calling that tool in the same response — either
+call it immediately or don't mention it yet. A tool reporting something already exists
+(e.g. a table) is not an error and needs no explanation to the user; treat it as fine and
+keep calling whatever tools are still needed to finish the request in that same turn.
+
 Apps can now be run for real. Once you've written an index.html with write_file, call
 run_preview to confirm it's ready, then tell the user to hit the Run button to open it.
 Inside the app's own HTML/JS, call any backend handlers you define with
