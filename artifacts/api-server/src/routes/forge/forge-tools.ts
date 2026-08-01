@@ -326,6 +326,10 @@ export async function executeForgeTool(
         return { error: `Unknown tool: ${name}` };
     }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    if (err instanceof Error) {
+      const cause = err.cause instanceof Error ? err.cause.message : typeof err.cause === "string" ? err.cause : undefined;
+      return { error: cause ? `${err.message} — caused by: ${cause}` : err.message };
+    }
+    return { error: String(err) };
   }
 }
