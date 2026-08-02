@@ -9,7 +9,7 @@ import AuthModal from "@/components/AuthModal";
 import SettingsPanel from "@/components/SettingsPanel";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { LogIn } from "lucide-react";
+import { LogIn, Menu } from "lucide-react";
 
 type Tab = "codex" | "cortex" | "forge";
 
@@ -30,6 +30,7 @@ export default function Home() {
   const [showAuth, setShowAuth] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("codex");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { user, isLoading } = useAuth();
 
   // Fully manual swipe using raw Touch Events (+ mouse events for desktop),
@@ -215,15 +216,22 @@ export default function Home() {
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
       {activeTab === "cortex" ? (
         <>
-          <Sidebar
-            activeConversationId={activeConversationId}
-            onSelectConversation={setActiveConversationId}
-            activeCortexConversationId={activeCortexConversationId}
-            onSelectCortexConversation={setActiveCortexConversationId}
-            onOpenSettings={() => setShowSettings(true)}
-            activeTab="cortex"
-            onTabChange={setActiveTab}
-          />
+          <motion.div
+            initial={false}
+            animate={{ width: sidebarCollapsed ? 0 : 288 }}
+            transition={{ type: "spring", stiffness: 380, damping: 38 }}
+            className="h-full shrink-0 overflow-hidden"
+          >
+            <Sidebar
+              activeConversationId={activeConversationId}
+              onSelectConversation={setActiveConversationId}
+              activeCortexConversationId={activeCortexConversationId}
+              onSelectCortexConversation={setActiveCortexConversationId}
+              onOpenSettings={() => setShowSettings(true)}
+              activeTab="cortex"
+              onTabChange={setActiveTab}
+            />
+          </motion.div>
           <div className="flex-1 flex flex-col min-w-0 relative">
             {!isLoading && !user && (
               <div className="absolute top-3 right-4 z-10">
@@ -258,15 +266,22 @@ export default function Home() {
             style={{ width: "200%", touchAction: "pan-y", x }}
           >
             <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
-              <Sidebar
-                activeConversationId={activeConversationId}
-                onSelectConversation={setActiveConversationId}
-                activeCortexConversationId={activeCortexConversationId}
-                onSelectCortexConversation={setActiveCortexConversationId}
-                onOpenSettings={() => setShowSettings(true)}
-                activeTab="codex"
-                onTabChange={setActiveTab}
-              />
+              <motion.div
+                initial={false}
+                animate={{ width: sidebarCollapsed ? 0 : 288 }}
+                transition={{ type: "spring", stiffness: 380, damping: 38 }}
+                className="h-full shrink-0 overflow-hidden"
+              >
+                <Sidebar
+                  activeConversationId={activeConversationId}
+                  onSelectConversation={setActiveConversationId}
+                  activeCortexConversationId={activeCortexConversationId}
+                  onSelectCortexConversation={setActiveCortexConversationId}
+                  onOpenSettings={() => setShowSettings(true)}
+                  activeTab="codex"
+                  onTabChange={setActiveTab}
+                />
+              </motion.div>
               <div className="flex-1 flex flex-col min-w-0 relative">
                 {!isLoading && !user && (
                   <div className="absolute top-3 right-4 z-10">
@@ -291,11 +306,18 @@ export default function Home() {
             </div>
 
             <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
-              <ForgeSidebar
-                activeForgeConversationId={activeForgeConversationId}
-                onSelectForgeConversation={setActiveForgeConversationId}
-                onOpenSettings={() => setShowSettings(true)}
-              />
+              <motion.div
+                initial={false}
+                animate={{ width: sidebarCollapsed ? 0 : 288 }}
+                transition={{ type: "spring", stiffness: 380, damping: 38 }}
+                className="h-full shrink-0 overflow-hidden"
+              >
+                <ForgeSidebar
+                  activeForgeConversationId={activeForgeConversationId}
+                  onSelectForgeConversation={setActiveForgeConversationId}
+                  onOpenSettings={() => setShowSettings(true)}
+                />
+              </motion.div>
               <div className="flex-1 flex flex-col min-w-0 relative">
                 {!isLoading && !user && (
                   <div className="absolute top-3 right-4 z-10">
@@ -319,6 +341,16 @@ export default function Home() {
           </motion.div>
         </div>
       )}
+
+      <button
+        onClick={() => setSidebarCollapsed((v) => !v)}
+        title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+        className={`fixed top-3 z-40 flex items-center justify-center w-8 h-8 rounded-lg bg-card border shadow-sm hover:bg-muted transition-[left] duration-300 ease-in-out ${
+          sidebarCollapsed ? "left-2" : "left-[264px]"
+        }`}
+      >
+        <Menu className="w-4 h-4" />
+      </button>
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
