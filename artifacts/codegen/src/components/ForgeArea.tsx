@@ -175,10 +175,28 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     setInput("");
 
     if (targetId === null) {
-      const newConv = await createMutation.mutateAsync({ data: { title: "New App" } });
-      targetId = newConv.id;
-      onConversationCreated(targetId);
-      if (user) queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
+      try {
+        const newConv = await createMutation.mutateAsync({ data: { title: "New App" } });
+        targetId = newConv.id;
+        onConversationCreated(targetId);
+        if (user) queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
+      } catch {
+        // Creating the app itself failed (e.g. a transient network/server
+        // error) — previously this was unhandled, crashing the whole send
+        // with no feedback. Roll back the optimistic UI and let the person
+        // retry instead.
+        setOptimisticUserMessage(null);
+        setInput(fullContent);
+        charQueueRef.current = "Couldn't start a new app just now — please try again.";
+        streamingContentRef.current = charQueueRef.current;
+        streamDoneRef.current = true;
+        finalizeTargetRef.current = null;
+        setDisplayedContent("");
+        setToolSteps([]);
+        setIsThinking(false);
+        setIsStreaming(true);
+        return;
+      }
     }
 
     guestPendingUserRef.current = fullContent;
