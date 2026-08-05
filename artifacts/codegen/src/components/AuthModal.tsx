@@ -61,7 +61,7 @@ export default function AuthModal({ onClose }: AuthModalProps) {
       queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? `[${err.name}] ${err.message}` : "Login failed");
     } finally {
       setLoading(false);
     }
