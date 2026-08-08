@@ -222,7 +222,17 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         signal: controller.signal,
       });
 
-      if (!response.ok) throw new Error("Network error");
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => "");
+        let message = errorBody;
+        try {
+          const parsed = JSON.parse(errorBody) as { error?: string };
+          message = parsed.error ?? errorBody;
+        } catch {
+          // Keep the plain response when it is not JSON.
+        }
+        throw new Error(message || `Request failed (${response.status})`);
+      }
       if (!response.body) throw new Error("No response body");
 
       setIsThinking(false);

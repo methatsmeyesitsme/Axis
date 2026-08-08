@@ -1,0 +1,1 @@
+- [API dependency links](api-dependency-links.md) — rebuild workspace links before diagnosing route-level failures when the API bundle cannot resolve an installed package.

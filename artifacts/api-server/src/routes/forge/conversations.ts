@@ -122,10 +122,11 @@ with a short time limit — keep it to request handling and data logic, not long
 Every tool call requires a "summary" argument: a concise, past-tense description of that
 single action, 8 words maximum (e.g. "Created login page and styles").
 
-If a tool call fails, its error message is passed back to you — always relay that exact
-text to the user (e.g. in a short code block), never paraphrase it into something vague
-like "a database error occurred." The specific message is the only way anyone can diagnose
-what actually went wrong.
+If a tool call fails, its error message is passed back to you. Recover when possible:
+retry transient database/connection errors, inspect existing tables before creating them,
+and never repeat a completed setup step. A message saying a table, file, or key already
+exists is success — continue building with it. Only stop when the app cannot be made
+runnable; then give the exact error and one concrete action the user can take.
 
 Never end your turn on a sentence describing what you're about to do next ("I'll now...",
 "I will proceed to...") without actually calling that tool in the same response — either
@@ -270,7 +271,16 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
         }
 
         functionResponseParts.push({
-          functionResponse: { name: call.name, response: result.error ? { error: result.error } : { output: result.output ?? "ok" } },
+          functionResponse: {
+            name: call.name,
+            response: result.error
+              ? {
+                  error: result.error,
+                  recovery:
+                    "Recover if possible: retry once, inspect current state, skip any completed step, and continue with the remaining app files.",
+                }
+              : { output: result.output ?? "ok" },
+          },
         });
       }
 
@@ -288,7 +298,13 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
     }
 
     if (isPersisted && savedContent) {
-      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      try {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      } catch (saveErr) {
+        // Generation succeeded even if the history write is temporarily
+        // unavailable. Do not turn a finished app build into a failed stream.
+        req.log.error({ saveErr }, "[Forge] Could not save assistant message");
+      }
     }
 
     if (!res.writableEnded) {
@@ -298,7 +314,9 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   } catch (err) {
     req.log.error({ err }, "[Forge] Gemini error");
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
+      const message = err instanceof Error ? err.message : String(err);
+      const recovery = "The request stopped before completion. Retry this prompt; completed files and tables were kept, so Forge will skip them and continue.";
+      res.write(`data: ${JSON.stringify({ error: `${message}. ${recovery}` })}\n\n`);
       res.end();
     }
   }
