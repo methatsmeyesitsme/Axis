@@ -1,1 +1,2 @@
 - [API dependency links](api-dependency-links.md) — rebuild workspace links before diagnosing route-level failures when the API bundle cannot resolve an installed package.
+- [Forge schema application](forge-schema-application.md) — Forge tables must be applied through the correctly named workspace database package after schema changes.
