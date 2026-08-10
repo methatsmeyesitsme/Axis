@@ -1,8 +1,24 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { X, Sun, Moon, LogOut, User, Mail, Lock } from "lucide-react";
+import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+
+interface GithubStatus {
+  connected: boolean;
+  login?: string;
+  avatarUrl?: string;
+  selectedOwner?: string | null;
+  selectedRepo?: string | null;
+  selectedBranch?: string | null;
+}
+
+interface GithubRepo {
+  owner: string;
+  repo: string;
+  fullName: string;
+  defaultBranch: string;
+}
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -27,6 +43,57 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const queryClient = useQueryClient();
   const [theme, setTheme] = useState<"light" | "dark">(getStoredTheme);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [githubStatus, setGithubStatus] = useState<GithubStatus | null>(null);
+  const [githubRepos, setGithubRepos] = useState<GithubRepo[] | null>(null);
+  const [githubBusy, setGithubBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    fetch("/api/github/status", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data: GithubStatus) => {
+        setGithubStatus(data);
+        if (data.connected) {
+          fetch("/api/github/repos", { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : []))
+            .then(setGithubRepos)
+            .catch(() => setGithubRepos([]));
+        }
+      })
+      .catch(() => setGithubStatus({ connected: false }));
+  }, [user]);
+
+  const handleConnectGithub = () => {
+    window.location.href = `/api/github/oauth/start?returnTo=${encodeURIComponent(window.location.pathname)}`;
+  };
+
+  const handleDisconnectGithub = async () => {
+    setGithubBusy(true);
+    try {
+      await fetch("/api/github/disconnect", { method: "POST", credentials: "include" });
+      setGithubStatus({ connected: false });
+      setGithubRepos(null);
+    } finally {
+      setGithubBusy(false);
+    }
+  };
+
+  const handleSelectRepo = async (fullName: string) => {
+    const match = githubRepos?.find((r) => r.fullName === fullName);
+    if (!match) return;
+    setGithubBusy(true);
+    try {
+      await fetch("/api/github/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ owner: match.owner, repo: match.repo, branch: match.defaultBranch }),
+      });
+      setGithubStatus((prev) => (prev ? { ...prev, selectedOwner: match.owner, selectedRepo: match.repo, selectedBranch: match.defaultBranch } : prev));
+    } finally {
+      setGithubBusy(false);
+    }
+  };
 
   useEffect(() => {
     applyTheme(theme);
@@ -88,6 +155,74 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {user && (
+          <div className="mb-6">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              GitHub
+            </h3>
+            {!githubStatus ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : githubStatus.connected ? (
+              <div className="space-y-3 bg-muted/40 rounded-xl p-4">
+                <div className="flex items-center gap-3">
+                  {githubStatus.avatarUrl ? (
+                    <img src={githubStatus.avatarUrl} alt={githubStatus.login} className="w-8 h-8 rounded-full shrink-0" />
+                  ) : (
+                    <Github className="w-4 h-4 text-muted-foreground shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-muted-foreground">Connected as</p>
+                    <p className="text-sm font-medium truncate">{githubStatus.login}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-red-500 shrink-0"
+                    onClick={handleDisconnectGithub}
+                    disabled={githubBusy}
+                    title="Disconnect GitHub"
+                  >
+                    <Unlink className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1.5">Repository</label>
+                  <select
+                    value={githubStatus.selectedOwner && githubStatus.selectedRepo ? `${githubStatus.selectedOwner}/${githubStatus.selectedRepo}` : ""}
+                    onChange={(e) => handleSelectRepo(e.target.value)}
+                    disabled={githubBusy || !githubRepos}
+                    className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                  >
+                    <option value="" disabled>
+                      {githubRepos ? "Choose a repository…" : "Loading repositories…"}
+                    </option>
+                    {githubRepos?.map((r) => (
+                      <option key={r.fullName} value={r.fullName}>
+                        {r.fullName}
+                      </option>
+                    ))}
+                  </select>
+                  {githubStatus.selectedBranch && (
+                    <p className="text-xs text-muted-foreground mt-1.5">Branch: {githubStatus.selectedBranch}</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={handleConnectGithub}
+              >
+                <Github className="w-4 h-4 mr-2" />
+                Connect GitHub
+              </Button>
+            )}
           </div>
         )}
 
