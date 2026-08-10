@@ -95,13 +95,13 @@ router.post("/login", async (req, res) => {
 
   const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
   if (!user) {
-    res.status(401).json({ error: "Invalid email or password" });
+    res.status(401).json({ error: "Wrong email or password" });
     return;
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    res.status(401).json({ error: "Invalid email or password" });
+    res.status(401).json({ error: "Wrong email or password" });
     return;
   }
 
