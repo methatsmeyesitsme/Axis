@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/axis-preview/"
+title = "Axis"
+description = "Preview of the Axis web application imported from the GitHub repository."
+version = "1.0.0"
+id = "artifacts/axis-preview"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/axis-preview/" ]
+localPort = 20778
+
+[services.development]
+run = "pnpm --filter @workspace/axis-preview run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/axis-preview", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/axis-preview/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20778"
+BASE_PATH = "/axis-preview/"

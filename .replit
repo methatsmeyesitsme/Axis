@@ -6,6 +6,9 @@ id = "artifacts/api-server"
 [[artifacts]]
 id = "artifacts/mockup-sandbox"
 
+[[artifacts]]
+id = "artifacts/codegen"
+
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
@@ -16,6 +19,27 @@ env = { "CI" = "true" }
 
 [workflows]
 runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Axis preview"
+
+[[workflows.workflow]]
+name = "Axis preview"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=5173 BASE_PATH=/ pnpm --filter @workspace/codegen run dev"
+waitForPort = 5173
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [agent]
 stack = "PNPM_WORKSPACE"
