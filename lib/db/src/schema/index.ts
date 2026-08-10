@@ -3,3 +3,4 @@ export * from "./conversations";
 export * from "./messages";
 export * from "./user-memories";
 export * from "./forge";
+export * from "./github";
