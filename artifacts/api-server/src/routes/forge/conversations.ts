@@ -122,10 +122,11 @@ with a short time limit — keep it to request handling and data logic, not long
 Every tool call requires a "summary" argument: a concise, past-tense description of that
 single action, 8 words maximum (e.g. "Created login page and styles").
 
-If a tool call fails, its error message is passed back to you — always relay that exact
-text to the user (e.g. in a short code block), never paraphrase it into something vague
-like "a database error occurred." The specific message is the only way anyone can diagnose
-what actually went wrong.
+If a tool call fails, its error message is passed back to you. Recover when possible:
+retry transient database/connection errors, inspect existing tables before creating them,
+and never repeat a completed setup step. A message saying a table, file, or key already
+exists is success — continue building with it. Only stop when the app cannot be made
+runnable; then give the exact error and one concrete action the user can take.
 
 Never end your turn on a sentence describing what you're about to do next ("I'll now...",
 "I will proceed to...") without actually calling that tool in the same response — either
@@ -172,7 +173,10 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   let forceToolCall = false;
 
   try {
-    let turnsRemaining = 8; // guard against runaway tool loops
+    // Keep a hard upper bound, but allow a normal app build to finish:
+    // several files, tables, handlers, and a final preview check can require
+    // more than eight model/tool turns.
+    let turnsRemaining = 16;
 
     while (turnsRemaining-- > 0) {
       const stream = await ai.models.generateContentStream({
@@ -270,17 +274,53 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
         }
 
         functionResponseParts.push({
-          functionResponse: { name: call.name, response: result.error ? { error: result.error } : { output: result.output ?? "ok" } },
+          functionResponse: {
+            name: call.name,
+            response: result.error
+              ? {
+                  error: result.error,
+                  recovery:
+                    "Recover if possible: retry once, inspect current state, skip any completed step, and continue with the remaining app files.",
+                }
+              : { output: result.output ?? "ok" },
+          },
         });
       }
 
       chatMessages.push({ role: "user", parts: functionResponseParts });
     }
 
+    if (!endedNaturally && isPersisted) {
+      // The model can spend the whole bounded loop on successful setup calls
+      // and never get to run_preview. Verify readiness on the server so a
+      // completed app is never mislabeled as a failed generation.
+      const previewToolId = `${Date.now()}-final-preview`;
+      const previewSummary = "Verified app is ready to run";
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ toolStart: { id: previewToolId, name: "run_preview", summary: previewSummary } })}\n\n`);
+      }
+      const previewResult = await executeForgeTool(id, "run_preview", {
+        summary: previewSummary,
+      });
+      if (!previewResult.error) {
+        endedNaturally = true;
+        savedContent += `\n\n✓ ${previewSummary}.`;
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolDone: { id: previewToolId, summary: previewSummary } })}\n\n`);
+        }
+      } else {
+        lastToolError = previewResult.error;
+        req.log.error({ error: previewResult.error }, "[Forge] Final preview check failed");
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolError: { id: previewToolId, summary: previewSummary, error: previewResult.error } })}\n\n`);
+        }
+      }
+    }
+
     if (!endedNaturally) {
-      const fallback = `\n\nI wasn't able to finish — tool calls kept failing${
-        lastToolError ? `, most recently with:\n\n\`${lastToolError}\`` : ""
-      }. Please try again, and if this keeps happening, let the person building this know.`;
+      const fallback = lastToolError
+        ? `\n\nI couldn't complete the final app readiness check. The completed steps were kept. Last error:\n\n\`${lastToolError}\`\n\nRetry this prompt to continue from the existing files and tables.`
+        : "\n\nThe app build reached its safety limit before the final readiness check. The completed files and tables were kept. Retry this prompt to continue from the existing app.";
       savedContent += fallback;
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
@@ -288,7 +328,13 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
     }
 
     if (isPersisted && savedContent) {
-      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      try {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      } catch (saveErr) {
+        // Generation succeeded even if the history write is temporarily
+        // unavailable. Do not turn a finished app build into a failed stream.
+        req.log.error({ saveErr }, "[Forge] Could not save assistant message");
+      }
     }
 
     if (!res.writableEnded) {
@@ -298,7 +344,9 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   } catch (err) {
     req.log.error({ err }, "[Forge] Gemini error");
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
+      const message = err instanceof Error ? err.message : String(err);
+      const recovery = "The request stopped before completion. Retry this prompt; completed files and tables were kept, so Forge will skip them and continue.";
+      res.write(`data: ${JSON.stringify({ error: `${message}. ${recovery}` })}\n\n`);
       res.end();
     }
   }

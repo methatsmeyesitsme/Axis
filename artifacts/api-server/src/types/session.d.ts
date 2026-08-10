@@ -5,5 +5,7 @@ declare module "express-session" {
     userId?: number;
     pendingEmail?: string;
     pendingPasswordHash?: string;
+    githubOAuthState?: string;
+    githubOAuthReturnTo?: string;
   }
 }

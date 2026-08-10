@@ -76,7 +76,8 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "create_table",
-    description: "Define a new structured data table for the app.",
+    description:
+      "Define a structured data table for the app. This is idempotent: inspect existing tables first, and if the table already exists, keep using it instead of trying to recreate it.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -92,6 +93,15 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
         ...summaryProp,
       },
       required: ["name", "columns", "summary"],
+    },
+  },
+  {
+    name: "table_list",
+    description: "List the structured tables already defined for this app before creating or migrating one.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: { ...summaryProp },
+      required: ["summary"],
     },
   },
   {
@@ -186,6 +196,31 @@ export function truncateSummary(raw: unknown, fallback: string): string {
   return words.length > 8 ? words.slice(0, 8).join(" ") + "…" : text;
 }
 
+type ForgeToolResult = { output?: unknown; error?: string };
+
+function errorText(err: unknown): string {
+  if (err instanceof Error) {
+    const code = typeof (err as Error & { code?: unknown }).code === "string"
+      ? ` [${(err as Error & { code: string }).code}]`
+      : "";
+    const cause = err.cause instanceof Error ? ` — caused by: ${err.cause.message}` : "";
+    return `${err.message}${code}${cause}`;
+  }
+  return String(err);
+}
+
+function isAlreadyCompletedError(error: string): boolean {
+  return /\b(already exists|duplicate key|duplicate table|relation .* already exists|duplicate object)\b/i.test(error);
+}
+
+function isTransientDatabaseError(error: string): boolean {
+  return /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|connection terminated|connection reset|connection closed|server closed|deadlock detected|could not serialize|too many connections|connection is not available|timeout expired|temporarily unavailable)\b/i.test(error);
+}
+
+async function pause(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function safeParseJson(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
@@ -200,11 +235,11 @@ function safeParseJson(value: unknown): unknown {
  * ever runs here. Real sandboxed execution of app *logic* is a separate, later
  * phase; this is just safe, server-controlled CRUD against tables scoped to appId.
  */
-export async function executeForgeTool(
+async function executeForgeToolOnce(
   appId: number,
   name: string,
   rawArgs: Record<string, unknown>
-): Promise<{ output?: unknown; error?: string }> {
+): Promise<ForgeToolResult> {
   try {
     switch (name) {
       case "write_file": {
@@ -252,16 +287,34 @@ export async function executeForgeTool(
         return { output: keys };
       }
       case "create_table": {
-        const tableName = String(rawArgs.name ?? "");
+        const tableName = String(rawArgs.name ?? "").trim();
         const columns = safeParseJson(rawArgs.columns);
         if (!tableName) return { error: "name is required" };
         const [existing] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
-        if (existing) return { output: `Table ${tableName} already exists` };
-        await db.insert(forgeAppTables).values({ appId, name: tableName, columns });
+        if (existing) return { output: `Table ${tableName} already exists — continue using the existing table` };
+        try {
+          await db.insert(forgeAppTables).values({ appId, name: tableName, columns });
+        } catch (err) {
+          const message = errorText(err);
+          // A repeated/concurrent create can race the existence check. Re-read
+          // before surfacing an error so completed setup remains resumable.
+          if (isAlreadyCompletedError(message)) {
+            const [racedExisting] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+            if (racedExisting) return { output: `Table ${tableName} already exists — continue using the existing table` };
+          }
+          throw err;
+        }
         return { output: `Created table ${tableName}` };
       }
+      case "table_list": {
+        const tables = await db
+          .select({ name: forgeAppTables.name, columns: forgeAppTables.columns })
+          .from(forgeAppTables)
+          .where(eq(forgeAppTables.appId, appId));
+        return { output: tables };
+      }
       case "table_insert": {
-        const tableName = String(rawArgs.table ?? "");
+        const tableName = String(rawArgs.table ?? "").trim();
         const rowData = safeParseJson(rawArgs.data) as Record<string, unknown>;
         const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist — create it first` };
@@ -326,10 +379,34 @@ export async function executeForgeTool(
         return { error: `Unknown tool: ${name}` };
     }
   } catch (err) {
-    if (err instanceof Error) {
-      const cause = err.cause instanceof Error ? err.cause.message : typeof err.cause === "string" ? err.cause : undefined;
-      return { error: cause ? `${err.message} — caused by: ${cause}` : err.message };
-    }
-    return { error: String(err) };
+    return { error: errorText(err) };
   }
+}
+
+/**
+ * Tool operations are retryable. PostgreSQL may briefly reject a valid
+ * operation while a connection is recycled or a concurrent setup finishes.
+ * Forge tools are app-scoped and setup operations are idempotent, so retrying
+ * is safe and lets the model resume instead of stopping the whole build.
+ */
+export async function executeForgeTool(
+  appId: number,
+  name: string,
+  rawArgs: Record<string, unknown>,
+): Promise<ForgeToolResult> {
+  let lastResult: ForgeToolResult = { error: `Tool ${name} failed` };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    lastResult = await executeForgeToolOnce(appId, name, rawArgs);
+    if (!lastResult.error) return lastResult;
+
+    if (isAlreadyCompletedError(lastResult.error)) {
+      return {
+        output: `${lastResult.error} — this setup step is already complete; continue with the next step`,
+      };
+    }
+
+    if (!isTransientDatabaseError(lastResult.error) || attempt === 2) return lastResult;
+    await pause(150 * 2 ** attempt);
+  }
+  return lastResult;
 }
