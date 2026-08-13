@@ -36,7 +36,7 @@ function encryptToken(token: string): string {
   return [iv.toString("base64"), authTag.toString("base64"), encrypted.toString("base64")].join(".");
 }
 
-function decryptToken(payload: string): string {
+export function decryptToken(payload: string): string {
   const [ivB64, tagB64, dataB64] = payload.split(".");
   const decipher = crypto.createDecipheriv(ENC_ALGO, getEncryptionKey(), Buffer.from(ivB64, "base64"));
   decipher.setAuthTag(Buffer.from(tagB64, "base64"));
@@ -46,6 +46,11 @@ function decryptToken(payload: string): string {
 
 function buildRedirectUri(req: { get(name: string): string | undefined }): string {
   return `https://${req.get("host")}/api/github/oauth/callback`;
+}
+
+export async function getUserGithubConnection(userId: number) {
+  const [conn] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
+  return conn ?? null;
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────

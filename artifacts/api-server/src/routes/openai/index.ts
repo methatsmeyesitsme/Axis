@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
 import { eq, desc, isNull } from "drizzle-orm";
+import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 
 const router: IRouter = Router();
 
@@ -274,7 +275,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
 
   // Strip huge embedded data from history so Gemini context stays manageable
   const { text: currentText, imageParts: currentImageParts } = extractImageParts(content);
-  const chatMessages = [
+  const chatMessages: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [
     ...history.map((m) => ({
       role: m.role === "assistant" ? "model" : ("user" as "model" | "user"),
       parts: [{
@@ -291,6 +292,36 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
       ],
     },
   ];
+
+  // Gemini can't combine googleSearch with custom function declarations in a
+  // single request (2.5-flash), so GitHub tool-calling runs as its own short,
+  // separate, non-streaming phase first — only when a repo is actually
+  // connected — before falling through to the normal search-enabled
+  // streaming response below (untouched either way).
+  if (userId && (await isGithubReady(userId))) {
+    let toolRounds = 4;
+    while (toolRounds-- > 0) {
+      const toolCheck = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: chatMessages,
+        config: {
+          systemInstruction: `${systemPrompt}\n\nIf the person is asking about the code in their connected GitHub repository, use the github_* tools to read or write real files before answering. Otherwise, don't call these tools — just answer normally.`,
+          tools: [{ functionDeclarations: githubToolDeclarations }],
+        },
+      });
+      const calls = toolCheck.functionCalls;
+      if (!calls?.length) break;
+      chatMessages.push({ role: "model", parts: calls.map((fc) => ({ functionCall: fc })) });
+      const responseParts: Array<Record<string, unknown>> = [];
+      for (const call of calls) {
+        const result = await executeGithubTool(userId, call.name ?? "", (call.args ?? {}) as Record<string, unknown>);
+        responseParts.push({
+          functionResponse: { name: call.name, response: result.error ? { error: result.error } : { output: result.output ?? "ok" } },
+        });
+      }
+      chatMessages.push({ role: "user", parts: responseParts });
+    }
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
