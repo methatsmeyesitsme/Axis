@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink } from "lucide-react";
+import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink, Copy, Check } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface GithubStatus {
@@ -46,6 +46,15 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [githubStatus, setGithubStatus] = useState<GithubStatus | null>(null);
   const [githubRepos, setGithubRepos] = useState<GithubRepo[] | null>(null);
   const [githubBusy, setGithubBusy] = useState(false);
+  const [githubCallbackUrl, setGithubCallbackUrl] = useState<string | null>(null);
+  const [callbackCopied, setCallbackCopied] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/github/oauth/config", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { callbackUrl?: string } | null) => setGithubCallbackUrl(data?.callbackUrl ?? null))
+      .catch(() => setGithubCallbackUrl(null));
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -214,14 +223,43 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </div>
               </div>
             ) : (
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={handleConnectGithub}
-              >
-                <Github className="w-4 h-4 mr-2" />
-                Connect GitHub
-              </Button>
+              <div className="space-y-3">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleConnectGithub}
+                >
+                  <Github className="w-4 h-4 mr-2" />
+                  Connect GitHub
+                </Button>
+                {githubCallbackUrl && (
+                  <div className="rounded-xl border bg-muted/30 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        In your GitHub OAuth App, set the callback URL to this exact stable URL:
+                      </p>
+                      <button
+                        type="button"
+                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                        title="Copy callback URL"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(githubCallbackUrl);
+                          setCallbackCopied(true);
+                          window.setTimeout(() => setCallbackCopied(false), 1500);
+                        }}
+                      >
+                        {callbackCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <code className="block mt-2 text-[11px] leading-relaxed break-all text-foreground/80">
+                      {githubCallbackUrl}
+                    </code>
+                    <p className="text-[11px] text-muted-foreground mt-2">
+                      Axis keeps the current preview page as the return destination, so preview URLs can change without changing this GitHub setting.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

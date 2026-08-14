@@ -7,10 +7,14 @@ const router: IRouter = Router();
 
 // GitHub OAuth App credentials — a person must register an OAuth App at
 // https://github.com/settings/developers and set these as Replit secrets.
-// The "Authorization callback URL" registered there must exactly match
-// what buildRedirectUri() constructs below.
+//
+// GitHub requires one exact callback URL. Do not derive it from the incoming
+// Host header: preview/proxy hosts can change between requests. Set
+// GITHUB_OAUTH_CALLBACK_URL to the canonical public callback URL when one is
+// available. In Replit development, REPLIT_DEV_DOMAIN is the stable fallback.
 const GITHUB_CLIENT_ID = process.env["GITHUB_CLIENT_ID"];
 const GITHUB_CLIENT_SECRET = process.env["GITHUB_CLIENT_SECRET"];
+const GITHUB_OAUTH_CALLBACK_URL = process.env["GITHUB_OAUTH_CALLBACK_URL"]?.trim();
 
 // Requests read/write access to the person's repos (not just profile info),
 // per the requirement that Axis be able to read AND write via this connection.
@@ -45,7 +49,25 @@ export function decryptToken(payload: string): string {
 }
 
 function buildRedirectUri(req: { get(name: string): string | undefined }): string {
-  return `https://${req.get("host")}/api/github/oauth/callback`;
+  if (GITHUB_OAUTH_CALLBACK_URL) return GITHUB_OAUTH_CALLBACK_URL;
+  const stableHost = process.env["REPLIT_DEV_DOMAIN"]?.trim() || req.get("host");
+  if (!stableHost) throw new Error("Unable to determine the GitHub OAuth callback host");
+  return `https://${stableHost}/api/github/oauth/callback`;
+}
+
+function normalizeReturnTo(value: unknown): string {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/";
+  try {
+    const parsed = new URL(value, "https://axis.invalid");
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
+function withGithubResult(returnTo: string, result: "connected" | "error"): string {
+  const separator = returnTo.includes("?") ? "&" : "?";
+  return `${returnTo}${separator}github=${result}`;
 }
 
 export async function getUserGithubConnection(userId: number) {
@@ -64,7 +86,7 @@ router.get("/oauth/start", (req, res) => {
 
   const state = crypto.randomBytes(24).toString("hex");
   req.session.githubOAuthState = state;
-  req.session.githubOAuthReturnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : "/";
+  req.session.githubOAuthReturnTo = normalizeReturnTo(req.query.returnTo);
 
   const params = new URLSearchParams({
     client_id: GITHUB_CLIENT_ID,
@@ -78,16 +100,17 @@ router.get("/oauth/start", (req, res) => {
 router.get("/oauth/callback", async (req, res) => {
   const userId = req.session?.userId;
   const returnTo = req.session?.githubOAuthReturnTo ?? "/";
+  const expectedState = req.session?.githubOAuthState;
   req.session.githubOAuthState = undefined;
   req.session.githubOAuthReturnTo = undefined;
 
   const { code, state } = req.query as { code?: string; state?: string };
-  if (!userId || !code || !state || state !== req.session.githubOAuthState) {
-    res.redirect(`${returnTo}?github=error`);
+  if (!userId || !code || !state || !expectedState || state !== expectedState) {
+    res.redirect(withGithubResult(returnTo, "error"));
     return;
   }
   if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
-    res.redirect(`${returnTo}?github=error`);
+    res.redirect(withGithubResult(returnTo, "error"));
     return;
   }
 
@@ -104,7 +127,7 @@ router.get("/oauth/callback", async (req, res) => {
     });
     const tokenData = (await tokenRes.json()) as { access_token?: string };
     if (!tokenData.access_token) {
-      res.redirect(`${returnTo}?github=error`);
+      res.redirect(withGithubResult(returnTo, "error"));
       return;
     }
 
@@ -130,9 +153,19 @@ router.get("/oauth/callback", async (req, res) => {
       });
     }
 
-    res.redirect(`${returnTo}?github=connected`);
+    res.redirect(withGithubResult(returnTo, "connected"));
   } catch {
-    res.redirect(`${returnTo}?github=error`);
+    res.redirect(withGithubResult(returnTo, "error"));
+  }
+});
+
+// Lets the Settings UI (and the person configuring the OAuth App) see the
+// exact callback URL Axis is using without exposing any credentials.
+router.get("/oauth/config", (req, res) => {
+  try {
+    res.json({ callbackUrl: buildRedirectUri(req) });
+  } catch {
+    res.status(500).json({ error: "Unable to determine the GitHub OAuth callback URL" });
   }
 });
 
