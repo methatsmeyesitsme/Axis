@@ -45,7 +45,7 @@ export function decryptToken(payload: string): string {
 }
 
 function buildRedirectUri(req: { get(name: string): string | undefined }): string {
-  return `https://${req.get("host")}/api/github/oauth/callback`;
+  return `https://https//git-hub-connect--jppjmt6p56.replit.app/api/github/oauth/callback`;
 }
 
 export async function getUserGithubConnection(userId: number) {
