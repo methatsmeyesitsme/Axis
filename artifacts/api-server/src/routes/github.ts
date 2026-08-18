@@ -51,12 +51,12 @@ export function decryptToken(payload: string): string {
 // GitHub OAuth Apps only accept ONE fixed, exact callback URL — no wildcards,
 // no multiple entries. The dev preview URL for this workspace changes
 // between sessions, so it can never reliably match a single registered
-// value. GITHUB_OAUTH_BASE_URL should be set once to whatever stable URL is
-// actually registered as the callback on GitHub (ideally a published
+// value. GITHUB_OAUTH_CALLBACK_URL should be set once to whatever stable URL
+// is actually registered as the callback on GitHub (ideally a published
 // deployment domain) — every OAuth request routes through that fixed URL
 // regardless of which ephemeral preview URL the person is currently on.
-// Falls back to the dynamic host only if that's not set (fine for a setup
-// that genuinely only ever has one, already-stable URL).
+// Falls back to REPLIT_DEV_DOMAIN (the stable Replit development domain),
+// then to the raw request host, only if neither of the above is set.
 function buildRedirectUri(req: { get(name: string): string | undefined }): string {
   if (GITHUB_OAUTH_CALLBACK_URL) return GITHUB_OAUTH_CALLBACK_URL;
   const stableHost = process.env["REPLIT_DEV_DOMAIN"]?.trim() || req.get("host");
@@ -77,17 +77,6 @@ function normalizeReturnTo(value: unknown): string {
 function withGithubResult(returnTo: string, result: "connected" | "error"): string {
   const separator = returnTo.includes("?") ? "&" : "?";
   return `${returnTo}${separator}github=${result}`;
-  function withGithubResult(returnTo: string, result: "connected" | "error"): string {
-    const separator = returnTo.includes("?") ? "&" : "?";
-    return `${returnTo}${separator}github=${result}`;
-  }
-
-  function buildRedirectUri(req: { get(name: string): string | undefined }): string {
-    const base = process.env["GITHUB_OAUTH_BASE_URL"];
-    if (base) return `${base.replace(/\/$/, "")}/api/github/oauth/callback`;
-    return `https://${req.get("host")}/api/github/oauth/callback`;
-  }
-
 }
 
 export async function getUserGithubConnection(userId: number) {
