@@ -4,22 +4,26 @@ let client: GoogleGenAI | undefined;
 
 function getClient(): GoogleGenAI {
   if (client) return client;
+
+  // Prefer Replit's hosted AI-integration credentials if present (these route
+  // through Replit's proxy, hence the custom baseUrl/apiVersion). Otherwise
+  // fall back to a personal Google AI Studio key, which talks to Google's
+  // real endpoint directly and needs no baseUrl override at all.
   const baseUrl = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL;
-  const apiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
-  if (!baseUrl) {
-    throw new Error(
-      "AI_INTEGRATIONS_GEMINI_BASE_URL must be set. Did you forget to provision the Gemini AI integration?",
-    );
-  }
+  const apiKey =
+    process.env.AI_INTEGRATIONS_GEMINI_API_KEY ??
+    process.env.GEMINI_API_KEY ??
+    process.env.GOOGLE_API_KEY;
+
   if (!apiKey) {
     throw new Error(
-      "AI_INTEGRATIONS_GEMINI_API_KEY must be set. Did you forget to provision the Gemini AI integration?",
+      "No Gemini API key found. Set AI_INTEGRATIONS_GEMINI_API_KEY (Replit's AI integration) or GEMINI_API_KEY (a personal Google AI Studio key) as a secret.",
     );
   }
-  client = new GoogleGenAI({
-    apiKey,
-    httpOptions: { apiVersion: "", baseUrl },
-  });
+
+  client = new GoogleGenAI(
+    baseUrl ? { apiKey, httpOptions: { apiVersion: "", baseUrl } } : { apiKey },
+  );
   return client;
 }
 
