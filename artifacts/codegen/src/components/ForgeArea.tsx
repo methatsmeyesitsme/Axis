@@ -271,7 +271,9 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
               setToolSteps((prev) => prev.map((s) => (s.id === toolId ? { ...s, status: "error" } : s)));
             }
             if (data.error) {
-              charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
+              const errorText = `Sorry, something went wrong: ${data.error}`;
+              charQueueRef.current += errorText;
+              streamingContentRef.current += errorText;
               done = true;
             }
             if (data.done) done = true;

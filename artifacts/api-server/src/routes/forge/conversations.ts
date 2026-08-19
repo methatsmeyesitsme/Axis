@@ -344,11 +344,15 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
     }
   } catch (err) {
     req.log.error({ err }, "[Forge] Gemini error");
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const message = friendlyGeminiErrorMessage(err, rawMessage);
+    const recovery = "The request stopped before completion. Retry this prompt; completed files and tables were kept, so Forge will skip them and continue.";
+    const fullMessage = `${message}. ${recovery}`;
+    if (isPersisted) {
+      await db.insert(messages).values({ conversationId: id, role: "assistant", content: fullMessage }).catch(() => {});
+    }
     if (!res.writableEnded) {
-      const rawMessage = err instanceof Error ? err.message : String(err);
-      const message = friendlyGeminiErrorMessage(err, rawMessage);
-      const recovery = "The request stopped before completion. Retry this prompt; completed files and tables were kept, so Forge will skip them and continue.";
-      res.write(`data: ${JSON.stringify({ error: `${message}. ${recovery}` })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: fullMessage })}\n\n`);
       res.end();
     }
   }

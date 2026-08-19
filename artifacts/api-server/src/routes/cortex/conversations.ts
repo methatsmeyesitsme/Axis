@@ -376,8 +376,12 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
     }
   } catch (err) {
     req.log.error({ err }, "[Cortex] Gemini error");
+    const friendlyMessage = friendlyGeminiErrorMessage(err);
+    if (userId && id > 0) {
+      await db.insert(messages).values({ conversationId: id, role: "assistant", content: friendlyMessage }).catch(() => {});
+    }
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: friendlyGeminiErrorMessage(err) })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: friendlyMessage })}\n\n`);
       res.end();
     }
   }

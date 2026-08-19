@@ -417,7 +417,9 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
               setStreamingSources(data.sources as Array<{ url: string; title: string }>);
             }
             if (data.error) {
-              charQueueRef.current += `Sorry, something went wrong: ${data.error}`;
+              const errorText = `Sorry, something went wrong: ${data.error}`;
+              charQueueRef.current += errorText;
+              streamingContentRef.current += errorText;
               done = true;
             }
             if (data.titleUpdate) setPendingTitle(data.titleUpdate as string);
