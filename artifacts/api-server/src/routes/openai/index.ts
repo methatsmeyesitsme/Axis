@@ -58,7 +58,7 @@ async function loadMemories(userId: number): Promise<string> {
 async function extractAndSaveMemories(userId: number, userMessage: string): Promise<void> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [{
         role: "user",
         parts: [{
@@ -92,7 +92,7 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
 async function generateTitle(userMessage: string, log?: { error: (o: unknown, m: string) => void }): Promise<string> {
   try {
     const titleResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [{
         role: "user",
         parts: [{
@@ -302,7 +302,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
     let toolRounds = 4;
     while (toolRounds-- > 0) {
       const toolCheck = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: chatMessages,
         config: {
           systemInstruction: `${systemPrompt}\n\nIf the person is asking about the code in their connected GitHub repository, use the github_* tools to read or write real files before answering. Otherwise, don't call these tools — just answer normally.`,
@@ -333,7 +333,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
 
   try {
     const stream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: chatMessages,
       config: {
         maxOutputTokens: 8192,

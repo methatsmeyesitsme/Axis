@@ -57,7 +57,7 @@ async function loadMemories(userId: number): Promise<string> {
 async function extractAndSaveMemories(userId: number, userMessage: string): Promise<void> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [{
         role: "user",
         parts: [{
@@ -91,7 +91,7 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
 async function generateTitle(userMessage: string, log?: { error: (o: unknown, m: string) => void }): Promise<string> {
   try {
     const titleResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [{
         role: "user",
         parts: [{
@@ -267,7 +267,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
 
   try {
     const stream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: chatMessages,
       config: {
         maxOutputTokens: 8192,

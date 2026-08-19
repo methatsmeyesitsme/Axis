@@ -16,7 +16,7 @@ import pRetry, { AbortError } from "p-retry";
  *   artworks,
  *   async (artwork) => {
  *     const response = await ai.models.generateContent({
- *       model: "gemini-2.5-flash",
+ *       model: "gemini-3.6-flash",
  *       contents: [{ role: "user", parts: [{ text: `Categorize: ${artwork.name}` }] }],
  *       config: { responseMimeType: "application/json" },
  *     });

@@ -180,7 +180,7 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
 
     while (turnsRemaining-- > 0) {
       const stream = await ai.models.generateContentStream({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: chatMessages,
         config: {
           systemInstruction: systemPrompt,
