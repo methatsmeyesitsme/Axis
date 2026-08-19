@@ -4,6 +4,7 @@ import { ai } from "@workspace/integrations-gemini-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { forgeToolDeclarations, executeForgeTool, truncateSummary } from "./forge-tools";
 import { FunctionCallingConfigMode, type FunctionCall } from "@google/genai";
+import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 
 const router: IRouter = Router();
 
@@ -344,7 +345,8 @@ ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you b
   } catch (err) {
     req.log.error({ err }, "[Forge] Gemini error");
     if (!res.writableEnded) {
-      const message = err instanceof Error ? err.message : String(err);
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      const message = friendlyGeminiErrorMessage(err, rawMessage);
       const recovery = "The request stopped before completion. Retry this prompt; completed files and tables were kept, so Forge will skip them and continue.";
       res.write(`data: ${JSON.stringify({ error: `${message}. ${recovery}` })}\n\n`);
       res.end();

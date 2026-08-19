@@ -3,6 +3,7 @@ import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
+import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 
 const router: IRouter = Router();
 
@@ -442,7 +443,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
   } catch (err) {
     req.log.error({ err }, "[Axis] Gemini error");
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: friendlyGeminiErrorMessage(err) })}\n\n`);
       res.end();
     }
   }
