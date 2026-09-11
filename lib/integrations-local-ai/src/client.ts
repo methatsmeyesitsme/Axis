@@ -5,9 +5,8 @@ let loading: Promise<TextGenerationPipeline> | null = null;
 let loadedModelId: string | null = null;
 
 /**
- * Free local models (ONNX, transformers.js compatible)
- * - 0.5B: lightest, safest for low-memory environments (default)
- * - 1.5B: noticeably smarter, needs more RAM
+ * Free local models (ONNX / transformers.js)
+ * Default is 1.5B for better quality. Use LOCAL_MODEL_SIZE=0.5b if memory is tight.
  */
 const MODELS = {
   "0.5b": "onnx-community/Qwen2.5-0.5B-Instruct",
@@ -17,9 +16,9 @@ const MODELS = {
 type LocalModelSize = keyof typeof MODELS;
 
 function getModelSize(): LocalModelSize {
-  const raw = (process.env.LOCAL_MODEL_SIZE || "0.5b").toLowerCase().trim();
-  if (raw === "1.5b" || raw === "1.5") return "1.5b";
-  return "0.5b";
+  const raw = (process.env.LOCAL_MODEL_SIZE || "1.5b").toLowerCase().trim();
+  if (raw === "0.5b" || raw === "0.5") return "0.5b";
+  return "1.5b";
 }
 
 function getModelId(): string {
@@ -29,7 +28,6 @@ function getModelId(): string {
 async function getGenerator(): Promise<TextGenerationPipeline> {
   const modelId = getModelId();
 
-  // Reload if the desired model changed
   if (generator && loadedModelId === modelId) return generator;
 
   if (!loading || loadedModelId !== modelId) {
@@ -51,41 +49,44 @@ async function getGenerator(): Promise<TextGenerationPipeline> {
 }
 
 /**
- * Short, forceful system prompt tuned for tiny local models.
- * Small models get confused by long instructions — keep this tight.
+ * Short, high-signal system prompt for small local models.
+ * Focused on coding quality over long instructions.
  */
 export function buildLocalSystemPrompt(language: string): string {
   return [
-    `You are Axis, a helpful coding assistant specializing in ${language}.`,
-    "Be clear, concise, and practical.",
-    "When writing code: use correct syntax, add brief comments, and explain key parts.",
-    "When debugging: identify the bug, explain why, then show the fixed code.",
-    "Always use markdown code blocks with the correct language tag.",
-    "Keep answers focused. Do not ramble.",
+    `You are Axis, an expert ${language} coding assistant.`,
+    "Write correct, clean, production-quality code.",
+    "When debugging: state the bug, explain why, then show the fixed code.",
+    "When generating code: use proper syntax, brief comments, and explain key parts after.",
+    "Always put code in markdown fences with the correct language tag.",
+    "Be concise and accurate. Prefer working solutions over long explanations.",
   ].join(" ");
 }
 
 /**
- * Generate a reply with the local model.
- * Context is intentionally kept small so the model stays coherent.
+ * Generate with the local model. Context is kept small so quality stays high.
  */
 export async function localGenerate(
   messages: Array<{ role: string; content: string }>,
   options: { maxNewTokens?: number } = {},
 ): Promise<string> {
   const pipe = await getGenerator();
+  const size = getModelSize();
 
-  // Hard limit context — tiny models degrade fast with long history
-  const maxMessages = getModelSize() === "1.5b" ? 6 : 4;
+  // Slightly more room for the 1.5B model
+  const maxMessages = size === "1.5b" ? 8 : 4;
+  const maxChars = size === "1.5b" ? 1600 : 1000;
+  const defaultTokens = size === "1.5b" ? 1024 : 384;
+
   const trimmed = messages.slice(-maxMessages).map((m) => ({
     role: m.role,
-    content: String(m.content).slice(0, 1200),
+    content: String(m.content).slice(0, maxChars),
   }));
 
   const result = await pipe(trimmed, {
-    max_new_tokens: options.maxNewTokens ?? (getModelSize() === "1.5b" ? 768 : 384),
+    max_new_tokens: options.maxNewTokens ?? defaultTokens,
     do_sample: false,
-    temperature: 0.2,
+    temperature: 0.15,
   });
 
   const raw = Array.isArray(result) ? result[0] : result;
@@ -95,7 +96,6 @@ export async function localGenerate(
     (typeof raw === "string" ? raw : JSON.stringify(raw));
 
   if (typeof generated === "string") {
-    // Prefer the last assistant turn if the full chat was returned
     const parts = generated.split(/(?:^|\n)assistant\s*/i);
     const last = parts[parts.length - 1]?.trim();
     if (last && last.length > 0) return last;
