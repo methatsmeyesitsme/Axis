@@ -15,6 +15,7 @@
     "@workspace/db": "workspace:*",
     "@workspace/integrations-gemini-ai": "workspace:*",
     "@workspace/integrations-groq-ai": "workspace:*",
+    "@workspace/integrations-local-ai": "workspace:*",
     "bcryptjs": "^3.0.3",
     "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
