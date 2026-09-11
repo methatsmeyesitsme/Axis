@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
-import { localGenerate } from "@workspace/integrations-local-ai";
+import { localGenerate, buildLocalSystemPrompt } from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
@@ -28,9 +28,6 @@ function getMimeType(ext: string): string {
   return MIME_MAP[ext.toLowerCase()] ?? "text/plain";
 }
 
-// Pulls any [IMAGE:mimeType|base64] markers out of a user message so they can be
-// sent to Gemini as real inlineData parts (i.e. the model can actually see them),
-// rather than as a giant base64 text blob.
 function extractImageParts(content: string): {
   text: string;
   imageParts: Array<{ inlineData: { mimeType: string; data: string } }>;
@@ -141,7 +138,6 @@ router.post("/conversations", async (req, res) => {
   const userId = req.session?.userId ?? null;
   const { title = "New Chat", language = "TypeScript" } = req.body as { title?: string; language?: string };
   if (!userId) {
-    // Guest: return a virtual conversation (nothing written to DB)
     res.status(201).json({ id: -1, title, language, createdAt: new Date().toISOString() });
     return;
   }
@@ -198,7 +194,6 @@ router.post("/conversations/:id/messages", async (req, res) => {
   const guestHistory: Array<{role: string; content: string}> = rawGuestHistory ?? [];
   const userId = req.session?.userId ?? null;
 
-  // Resolve language: authenticated users load from DB; guests supply via body
   let convLanguage = bodyLanguage ?? "TypeScript";
   if (userId && id > 0) {
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
@@ -206,12 +201,10 @@ router.post("/conversations/:id/messages", async (req, res) => {
     convLanguage = conv.language;
   }
 
-  // History: DB for authenticated users, in-body for guests
   const history: Array<{role: string; content: string}> = (userId && id > 0)
     ? (await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt)).map((m) => ({ role: m.role, content: m.content }))
     : guestHistory;
 
-  // Only persist user message for authenticated users
   if (userId && id > 0) {
     await db.insert(messages).values({ conversationId: id, role: "user", content });
   }
@@ -228,8 +221,6 @@ router.post("/conversations/:id/messages", async (req, res) => {
   }
 
   // ── LOCAL PROVIDER (last-resort backup) ───────────────────────────────────
-  // Used only when neither Groq nor Gemini keys are available.
-  // Quality is limited (0.5B model). Kept deliberately simple.
   if (getAiProvider() === "local") {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -238,25 +229,27 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.flushHeaders();
 
     try {
+      // Short prompt tuned for small models + limited history
+      const localSystem = buildLocalSystemPrompt(convLanguage);
       const localMessages = [
-        { role: "system", content: systemPrompt },
-        ...history.map((m) => ({
+        { role: "system", content: localSystem },
+        ...history.slice(-3).map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content
-            .replace(/\[IMAGE:[^\]]*\]/g, "[image was attached here]")
-            .replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]"),
+            .replace(/\[IMAGE:[^\]]*\]/g, "[image]")
+            .replace(/\[FILEDATA:[^\]]*\]/g, "[file]")
+            .slice(0, 800),
         })),
-        { role: "user", content: content.slice(0, 2000) }, // keep prompt small for 0.5B
+        { role: "user", content: content.slice(0, 1200) },
       ];
 
-      const reply = await localGenerate(localMessages, { maxNewTokens: 512 });
+      const reply = await localGenerate(localMessages);
 
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ content: reply })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       }
 
-      // Persist assistant reply for authenticated users
       if (userId && id > 0 && reply) {
         await db.insert(messages).values({ conversationId: id, role: "assistant", content: reply });
       }
@@ -271,9 +264,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return;
   }
 
-  // ── GEMINI PATH (default when keys are present) ───────────────────────────
+  // ── GEMINI PATH ─────────────────────────────────────────────────────────────
 
-  // Strip huge embedded data from history so Gemini context stays manageable
   const { text: currentText, imageParts: currentImageParts } = extractImageParts(content);
   const chatMessages: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [
     ...history.map((m) => ({
@@ -293,11 +285,6 @@ router.post("/conversations/:id/messages", async (req, res) => {
     },
   ];
 
-  // Gemini can't combine googleSearch with custom function declarations in a
-  // single request, so GitHub tool-calling runs as its own short,
-  // separate, non-streaming phase first — only when a repo is actually
-  // connected — before falling through to the normal search-enabled
-  // streaming response below.
   if (userId && (await isGithubReady(userId))) {
     let toolRounds = 4;
     while (toolRounds-- > 0) {
