@@ -1,0 +1,15 @@
+{
+  "name": "@workspace/integrations-local-ai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
+  }
+}
