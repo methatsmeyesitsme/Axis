@@ -2,13 +2,14 @@
  * Backend-only AI provider switch.
  * Users cannot change this — only you (via env var / secrets).
  *
- * Priority (highest → lowest):
- *   1. Groq   (if GROQ_API_KEY is set or AXIS_AI_PROVIDER=groq)
- *   2. Gemini (if a Gemini key is set or AXIS_AI_PROVIDER=gemini)
- *   3. Local  (Qwen2.5-0.5B on-device) — last-resort backup only
+ * Current default: local (free on-device Qwen)
  *
  * Force a provider with:
- *   AXIS_AI_PROVIDER=groq | gemini | local
+ *   AXIS_AI_PROVIDER=local | groq | gemini
+ *
+ * Local model size:
+ *   LOCAL_MODEL_SIZE=1.5b   (default, smarter)
+ *   LOCAL_MODEL_SIZE=0.5b   (lighter, if memory is tight)
  */
 
 export type AiProvider = "groq" | "gemini" | "local";
@@ -24,9 +25,7 @@ export function getAiProvider(): AiProvider {
     return forced;
   }
 
-  // Auto priority
-  if (process.env.GROQ_API_KEY) return "groq";
-  if (hasGeminiKey()) return "gemini";
+  // Default to local (free, on-device) as requested
   return "local";
 }
 
@@ -35,7 +34,7 @@ export function getProviderDisplayName(provider: AiProvider = getAiProvider()): 
     case "groq":
       return "Groq";
     case "local":
-      return "Local (Qwen 0.5B)";
+      return "Local (Qwen)";
     default:
       return "Gemini";
   }
