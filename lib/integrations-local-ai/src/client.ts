@@ -2,22 +2,47 @@ import { pipeline, type TextGenerationPipeline } from "@huggingface/transformers
 
 let generator: TextGenerationPipeline | null = null;
 let loading: Promise<TextGenerationPipeline> | null = null;
+let loadedModelId: string | null = null;
 
-const MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
+/**
+ * Free local models (ONNX, transformers.js compatible)
+ * - 0.5B: lightest, safest for low-memory environments (default)
+ * - 1.5B: noticeably smarter, needs more RAM
+ */
+const MODELS = {
+  "0.5b": "onnx-community/Qwen2.5-0.5B-Instruct",
+  "1.5b": "onnx-community/Qwen2.5-1.5B-Instruct",
+} as const;
+
+type LocalModelSize = keyof typeof MODELS;
+
+function getModelSize(): LocalModelSize {
+  const raw = (process.env.LOCAL_MODEL_SIZE || "0.5b").toLowerCase().trim();
+  if (raw === "1.5b" || raw === "1.5") return "1.5b";
+  return "0.5b";
+}
+
+function getModelId(): string {
+  return MODELS[getModelSize()];
+}
 
 async function getGenerator(): Promise<TextGenerationPipeline> {
-  if (generator) return generator;
+  const modelId = getModelId();
 
-  if (!loading) {
+  // Reload if the desired model changed
+  if (generator && loadedModelId === modelId) return generator;
+
+  if (!loading || loadedModelId !== modelId) {
     loading = (async () => {
-      console.log("[local-ai] Loading Qwen2.5-0.5B-Instruct (this can take a while on first run)...");
+      console.log(`[local-ai] Loading ${modelId} (first run can take a while)...`);
       const t0 = Date.now();
-      const pipe = await pipeline("text-generation", MODEL_ID, {
+      const pipe = await pipeline("text-generation", modelId, {
         dtype: "q4",
         device: "cpu",
       });
       console.log(`[local-ai] Model loaded in ${Date.now() - t0}ms`);
       generator = pipe as TextGenerationPipeline;
+      loadedModelId = modelId;
       return generator;
     })();
   }
@@ -26,9 +51,23 @@ async function getGenerator(): Promise<TextGenerationPipeline> {
 }
 
 /**
- * Very small local model intended only as a last-resort backup
- * when Groq and Gemini are unavailable.
- * Quality is limited — do not expect strong coding performance.
+ * Short, forceful system prompt tuned for tiny local models.
+ * Small models get confused by long instructions — keep this tight.
+ */
+export function buildLocalSystemPrompt(language: string): string {
+  return [
+    `You are Axis, a helpful coding assistant specializing in ${language}.`,
+    "Be clear, concise, and practical.",
+    "When writing code: use correct syntax, add brief comments, and explain key parts.",
+    "When debugging: identify the bug, explain why, then show the fixed code.",
+    "Always use markdown code blocks with the correct language tag.",
+    "Keep answers focused. Do not ramble.",
+  ].join(" ");
+}
+
+/**
+ * Generate a reply with the local model.
+ * Context is intentionally kept small so the model stays coherent.
  */
 export async function localGenerate(
   messages: Array<{ role: string; content: string }>,
@@ -36,14 +75,19 @@ export async function localGenerate(
 ): Promise<string> {
   const pipe = await getGenerator();
 
-  const result = await pipe(messages, {
-    max_new_tokens: options.maxNewTokens ?? 256,
+  // Hard limit context — tiny models degrade fast with long history
+  const maxMessages = getModelSize() === "1.5b" ? 6 : 4;
+  const trimmed = messages.slice(-maxMessages).map((m) => ({
+    role: m.role,
+    content: String(m.content).slice(0, 1200),
+  }));
+
+  const result = await pipe(trimmed, {
+    max_new_tokens: options.maxNewTokens ?? (getModelSize() === "1.5b" ? 768 : 384),
     do_sample: false,
-    temperature: 0.1,
+    temperature: 0.2,
   });
 
-  // Transformers.js returns different shapes depending on version;
-  // normalize to a plain string.
   const raw = Array.isArray(result) ? result[0] : result;
   const generated =
     (raw as any)?.generated_text ??
@@ -51,13 +95,15 @@ export async function localGenerate(
     (typeof raw === "string" ? raw : JSON.stringify(raw));
 
   if (typeof generated === "string") {
-    // When chat template is used, the full conversation is often returned.
-    // Try to extract only the assistant's last reply.
-    const lastAssistant = generated.split(/assistant\s*/i).pop()?.trim();
-    return lastAssistant || generated.trim();
+    // Prefer the last assistant turn if the full chat was returned
+    const parts = generated.split(/(?:^|\n)assistant\s*/i);
+    const last = parts[parts.length - 1]?.trim();
+    if (last && last.length > 0) return last;
+    return generated.trim();
   }
 
   return String(generated);
 }
 
-export const LOCAL_MODEL_ID = MODEL_ID;
+export const LOCAL_MODEL_ID = getModelId();
+export { getModelSize };
