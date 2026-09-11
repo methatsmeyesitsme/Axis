@@ -5,25 +5,19 @@ import crypto from "node:crypto";
 
 const router: IRouter = Router();
 
-// GitHub OAuth App credentials — a person must register an OAuth App at
-// https://github.com/settings/developers and set these as Replit secrets.
-//
-// GitHub requires one exact callback URL. Do not derive it from the incoming
-// Host header: preview/proxy hosts can change between requests. Set
-// GITHUB_OAUTH_CALLBACK_URL to the canonical public callback URL when one is
-// available. In Replit development, REPLIT_DEV_DOMAIN is the stable fallback.
+// ── Auth options ─────────────────────────────────────────────────────────────
+// 1) Easy path (recommended): set GITHUB_TOKEN secret to a Personal Access Token
+//    → no OAuth App needed
+// 2) Full OAuth path (optional): GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET
+
 const GITHUB_CLIENT_ID = process.env["GITHUB_CLIENT_ID"];
 const GITHUB_CLIENT_SECRET = process.env["GITHUB_CLIENT_SECRET"];
 const GITHUB_OAUTH_CALLBACK_URL = process.env["GITHUB_OAUTH_CALLBACK_URL"]?.trim();
+const GITHUB_TOKEN_ENV = process.env["GITHUB_TOKEN"]?.trim(); // Personal Access Token (easy path)
 
-// Requests read/write access to the person's repos (not just profile info),
-// per the requirement that Axis be able to read AND write via this connection.
 const GITHUB_OAUTH_SCOPE = "repo read:user";
 
 // ── Token encryption (AES-256-GCM) ──────────────────────────────────────────
-// Access tokens are stored encrypted at rest, never in plaintext, and are
-// only ever decrypted server-side for the one request that needs to call the
-// GitHub API on the person's behalf.
 
 const ENC_ALGO = "aes-256-gcm";
 
@@ -41,6 +35,8 @@ function encryptToken(token: string): string {
 }
 
 export function decryptToken(payload: string): string {
+  // Plain env tokens are not encrypted
+  if (!payload.includes(".")) return payload;
   const [ivB64, tagB64, dataB64] = payload.split(".");
   const decipher = crypto.createDecipheriv(ENC_ALGO, getEncryptionKey(), Buffer.from(ivB64, "base64"));
   decipher.setAuthTag(Buffer.from(tagB64, "base64"));
@@ -48,15 +44,6 @@ export function decryptToken(payload: string): string {
   return decrypted.toString("utf8");
 }
 
-// GitHub OAuth Apps only accept ONE fixed, exact callback URL — no wildcards,
-// no multiple entries. The dev preview URL for this workspace changes
-// between sessions, so it can never reliably match a single registered
-// value. GITHUB_OAUTH_CALLBACK_URL should be set once to whatever stable URL
-// is actually registered as the callback on GitHub (ideally a published
-// deployment domain) — every OAuth request routes through that fixed URL
-// regardless of which ephemeral preview URL the person is currently on.
-// Falls back to REPLIT_DEV_DOMAIN (the stable Replit development domain),
-// then to the raw request host, only if neither of the above is set.
 function buildRedirectUri(req: { get(name: string): string | undefined }): string {
   if (GITHUB_OAUTH_CALLBACK_URL) return GITHUB_OAUTH_CALLBACK_URL;
   const stableHost = process.env["REPLIT_DEV_DOMAIN"]?.trim() || req.get("host");
@@ -79,17 +66,112 @@ function withGithubResult(returnTo: string, result: "connected" | "error"): stri
   return `${returnTo}${separator}github=${result}`;
 }
 
+async function fetchGithubUser(token: string): Promise<{ id: number; login: string; avatar_url: string } | null> {
+  const res = await fetch("https://api.github.com/user", {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "Axis" },
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as { id: number; login: string; avatar_url: string };
+}
+
+/**
+ * Returns the user's GitHub connection.
+ * Priority:
+ *  1. Per-user DB connection (OAuth or saved PAT)
+ *  2. Global GITHUB_TOKEN env secret (simple no-OAuth path)
+ */
 export async function getUserGithubConnection(userId: number) {
   const [conn] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
-  return conn ?? null;
+  if (conn) return conn;
+
+  // Fallback: global Personal Access Token from secrets
+  if (GITHUB_TOKEN_ENV) {
+    return {
+      id: -1,
+      userId,
+      githubUserId: "env",
+      login: "token",
+      avatarUrl: null as string | null,
+      encryptedAccessToken: GITHUB_TOKEN_ENV, // plain token; decryptToken handles this
+      selectedOwner: process.env["GITHUB_DEFAULT_OWNER"] ?? null,
+      selectedRepo: process.env["GITHUB_DEFAULT_REPO"] ?? null,
+      selectedBranch: process.env["GITHUB_DEFAULT_BRANCH"] ?? "main",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  return null;
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
+/**
+ * Easy connect: paste a Personal Access Token (no OAuth App required).
+ * Body: { token: "ghp_...", owner?: string, repo?: string, branch?: string }
+ */
+router.post("/connect-token", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Log in first" }); return; }
+
+  const { token, owner, repo, branch } = req.body as {
+    token?: string;
+    owner?: string;
+    repo?: string;
+    branch?: string;
+  };
+
+  if (!token?.trim()) {
+    res.status(400).json({ error: "token is required (create one at https://github.com/settings/tokens)" });
+    return;
+  }
+
+  const ghUser = await fetchGithubUser(token.trim());
+  if (!ghUser) {
+    res.status(400).json({ error: "Invalid GitHub token (or missing repo scope)" });
+    return;
+  }
+
+  const encryptedAccessToken = encryptToken(token.trim());
+  const [existing] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
+
+  if (existing) {
+    await db
+      .update(githubConnections)
+      .set({
+        githubUserId: String(ghUser.id),
+        login: ghUser.login,
+        avatarUrl: ghUser.avatar_url,
+        encryptedAccessToken,
+        selectedOwner: owner ?? existing.selectedOwner,
+        selectedRepo: repo ?? existing.selectedRepo,
+        selectedBranch: branch ?? existing.selectedBranch ?? "main",
+        updatedAt: new Date(),
+      })
+      .where(eq(githubConnections.id, existing.id));
+  } else {
+    await db.insert(githubConnections).values({
+      userId,
+      githubUserId: String(ghUser.id),
+      login: ghUser.login,
+      avatarUrl: ghUser.avatar_url,
+      encryptedAccessToken,
+      selectedOwner: owner ?? null,
+      selectedRepo: repo ?? null,
+      selectedBranch: branch ?? "main",
+    });
+  }
+
+  res.json({ ok: true, login: ghUser.login });
+});
+
+// Optional OAuth path (kept for people who already set up an OAuth App)
 router.get("/oauth/start", (req, res) => {
   if (!req.session.userId) { res.status(401).json({ error: "Log in first" }); return; }
   if (!GITHUB_CLIENT_ID) {
-    res.status(500).json({ error: "GitHub integration is not configured (missing GITHUB_CLIENT_ID)" });
+    res.status(500).json({
+      error: "OAuth is not configured. Use a Personal Access Token instead (easier). Set GITHUB_TOKEN or POST /api/github/connect-token.",
+    });
     return;
   }
 
@@ -140,10 +222,11 @@ router.get("/oauth/callback", async (req, res) => {
       return;
     }
 
-    const userRes = await fetch("https://api.github.com/user", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: "application/vnd.github+json", "User-Agent": "Axis" },
-    });
-    const ghUser = (await userRes.json()) as { id: number; login: string; avatar_url: string };
+    const ghUser = await fetchGithubUser(tokenData.access_token);
+    if (!ghUser) {
+      res.redirect(withGithubResult(returnTo, "error"));
+      return;
+    }
 
     const encryptedAccessToken = encryptToken(tokenData.access_token);
     const [existing] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
@@ -168,11 +251,13 @@ router.get("/oauth/callback", async (req, res) => {
   }
 });
 
-// Lets the Settings UI (and the person configuring the OAuth App) see the
-// exact callback URL Axis is using without exposing any credentials.
 router.get("/oauth/config", (req, res) => {
   try {
-    res.json({ callbackUrl: buildRedirectUri(req) });
+    res.json({
+      callbackUrl: buildRedirectUri(req),
+      patSupported: true,
+      hasEnvToken: !!GITHUB_TOKEN_ENV,
+    });
   } catch {
     res.status(500).json({ error: "Unable to determine the GitHub OAuth callback URL" });
   }
@@ -181,8 +266,10 @@ router.get("/oauth/config", (req, res) => {
 router.get("/status", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.json({ connected: false }); return; }
-  const [conn] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
-  if (!conn) { res.json({ connected: false }); return; }
+
+  const conn = await getUserGithubConnection(userId);
+  if (!conn) { res.json({ connected: false, patSupported: true }); return; }
+
   res.json({
     connected: true,
     login: conn.login,
@@ -190,14 +277,17 @@ router.get("/status", async (req, res) => {
     selectedOwner: conn.selectedOwner,
     selectedRepo: conn.selectedRepo,
     selectedBranch: conn.selectedBranch,
+    viaEnvToken: conn.id === -1,
+    patSupported: true,
   });
 });
 
 router.get("/repos", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Log in first" }); return; }
-  const [conn] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
-  if (!conn) { res.status(400).json({ error: "GitHub is not connected" }); return; }
+
+  const conn = await getUserGithubConnection(userId);
+  if (!conn) { res.status(400).json({ error: "GitHub is not connected. Add a Personal Access Token." }); return; }
 
   const token = decryptToken(conn.encryptedAccessToken);
   const ghRes = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
@@ -216,7 +306,27 @@ router.post("/select", async (req, res) => {
   if (!owner || !repo) { res.status(400).json({ error: "owner and repo are required" }); return; }
 
   const [conn] = await db.select().from(githubConnections).where(eq(githubConnections.userId, userId));
-  if (!conn) { res.status(400).json({ error: "GitHub is not connected" }); return; }
+
+  // If only using env token, store the selection in a lightweight DB row
+  if (!conn) {
+    if (!GITHUB_TOKEN_ENV) {
+      res.status(400).json({ error: "GitHub is not connected" });
+      return;
+    }
+    const ghUser = await fetchGithubUser(GITHUB_TOKEN_ENV);
+    await db.insert(githubConnections).values({
+      userId,
+      githubUserId: ghUser ? String(ghUser.id) : "env",
+      login: ghUser?.login ?? "token",
+      avatarUrl: ghUser?.avatar_url ?? null,
+      encryptedAccessToken: encryptToken(GITHUB_TOKEN_ENV),
+      selectedOwner: owner,
+      selectedRepo: repo,
+      selectedBranch: branch ?? "main",
+    });
+    res.json({ ok: true });
+    return;
+  }
 
   await db
     .update(githubConnections)
