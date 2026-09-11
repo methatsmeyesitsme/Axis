@@ -1,31 +1,28 @@
 /**
  * Backend-only AI provider switch.
- * Users cannot change this — only you (via env var / secrets).
  *
- * Current default: local (free on-device Qwen)
+ * MAIN PROVIDER = local (free on-device Qwen)
+ * Cloud providers only run when you explicitly force them.
  *
- * Force a provider with:
- *   AXIS_AI_PROVIDER=local | groq | gemini
+ *   AXIS_AI_PROVIDER=local   → local (default)
+ *   AXIS_AI_PROVIDER=groq    → Groq (needs GROQ_API_KEY)
+ *   AXIS_AI_PROVIDER=gemini  → Gemini (needs a Gemini key)
  *
  * Local model size:
  *   LOCAL_MODEL_SIZE=1.5b   (default, smarter)
- *   LOCAL_MODEL_SIZE=0.5b   (lighter, if memory is tight)
+ *   LOCAL_MODEL_SIZE=0.5b   (lighter)
  */
 
 export type AiProvider = "groq" | "gemini" | "local";
 
-function hasGeminiKey(): boolean {
-  return !!(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-}
-
 export function getAiProvider(): AiProvider {
   const forced = process.env.AXIS_AI_PROVIDER?.toLowerCase().trim();
 
-  if (forced === "groq" || forced === "gemini" || forced === "local") {
-    return forced;
-  }
+  // Only leave local when explicitly requested
+  if (forced === "groq") return "groq";
+  if (forced === "gemini") return "gemini";
 
-  // Default to local (free, on-device) as requested
+  // Everything else (including unset) → local
   return "local";
 }
 
