@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink, Copy, Check } from "lucide-react";
+import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface GithubStatus {
@@ -11,6 +11,7 @@ interface GithubStatus {
   selectedOwner?: string | null;
   selectedRepo?: string | null;
   selectedBranch?: string | null;
+  patSupported?: boolean;
 }
 
 interface GithubRepo {
@@ -46,17 +47,10 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [githubStatus, setGithubStatus] = useState<GithubStatus | null>(null);
   const [githubRepos, setGithubRepos] = useState<GithubRepo[] | null>(null);
   const [githubBusy, setGithubBusy] = useState(false);
-  const [githubCallbackUrl, setGithubCallbackUrl] = useState<string | null>(null);
-  const [callbackCopied, setCallbackCopied] = useState(false);
+  const [patInput, setPatInput] = useState("");
+  const [patError, setPatError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/github/oauth/config", { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { callbackUrl?: string } | null) => setGithubCallbackUrl(data?.callbackUrl ?? null))
-      .catch(() => setGithubCallbackUrl(null));
-  }, []);
-
-  useEffect(() => {
+  const refreshGithub = () => {
     if (!user) return;
     fetch("/api/github/status", { credentials: "include" })
       .then((r) => r.json())
@@ -67,13 +61,43 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             .then((r) => (r.ok ? r.json() : []))
             .then(setGithubRepos)
             .catch(() => setGithubRepos([]));
+        } else {
+          setGithubRepos(null);
         }
       })
       .catch(() => setGithubStatus({ connected: false }));
+  };
+
+  useEffect(() => {
+    refreshGithub();
   }, [user]);
 
-  const handleConnectGithub = () => {
-    window.location.href = `/api/github/oauth/start?returnTo=${encodeURIComponent(window.location.pathname)}`;
+  const handleConnectWithPat = async () => {
+    if (!patInput.trim()) {
+      setPatError("Paste a GitHub token first");
+      return;
+    }
+    setGithubBusy(true);
+    setPatError(null);
+    try {
+      const res = await fetch("/api/github/connect-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ token: patInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPatError(data.error || "Failed to connect token");
+        return;
+      }
+      setPatInput("");
+      refreshGithub();
+    } catch {
+      setPatError("Network error — try again");
+    } finally {
+      setGithubBusy(false);
+    }
   };
 
   const handleDisconnectGithub = async () => {
@@ -98,7 +122,16 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
         credentials: "include",
         body: JSON.stringify({ owner: match.owner, repo: match.repo, branch: match.defaultBranch }),
       });
-      setGithubStatus((prev) => (prev ? { ...prev, selectedOwner: match.owner, selectedRepo: match.repo, selectedBranch: match.defaultBranch } : prev));
+      setGithubStatus((prev) =>
+        prev
+          ? {
+              ...prev,
+              selectedOwner: match.owner,
+              selectedRepo: match.repo,
+              selectedBranch: match.defaultBranch,
+            }
+          : prev,
+      );
     } finally {
       setGithubBusy(false);
     }
@@ -126,7 +159,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 relative">
+      <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 relative max-h-[90vh] overflow-y-auto">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors"
@@ -180,7 +213,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
               <div className="space-y-3 bg-muted/40 rounded-xl p-4">
                 <div className="flex items-center gap-3">
                   {githubStatus.avatarUrl ? (
-                    <img src={githubStatus.avatarUrl} alt={githubStatus.login} className="w-8 h-8 rounded-full shrink-0" />
+                    <img
+                      src={githubStatus.avatarUrl}
+                      alt={githubStatus.login}
+                      className="w-8 h-8 rounded-full shrink-0"
+                    />
                   ) : (
                     <Github className="w-4 h-4 text-muted-foreground shrink-0" />
                   )}
@@ -203,7 +240,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Repository</label>
                   <select
-                    value={githubStatus.selectedOwner && githubStatus.selectedRepo ? `${githubStatus.selectedOwner}/${githubStatus.selectedRepo}` : ""}
+                    value={
+                      githubStatus.selectedOwner && githubStatus.selectedRepo
+                        ? `${githubStatus.selectedOwner}/${githubStatus.selectedRepo}`
+                        : ""
+                    }
                     onChange={(e) => handleSelectRepo(e.target.value)}
                     disabled={githubBusy || !githubRepos}
                     className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
@@ -218,47 +259,55 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                     ))}
                   </select>
                   {githubStatus.selectedBranch && (
-                    <p className="text-xs text-muted-foreground mt-1.5">Branch: {githubStatus.selectedBranch}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      Branch: {githubStatus.selectedBranch}
+                    </p>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3 bg-muted/40 rounded-xl p-4">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Paste a GitHub Personal Access Token (no OAuth App needed). Create one at{" "}
+                  <a
+                    href="https://github.com/settings/tokens"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-foreground"
+                  >
+                    github.com/settings/tokens
+                  </a>{" "}
+                  with the <strong>repo</strong> scope.
+                </p>
+                <input
+                  type="password"
+                  value={patInput}
+                  onChange={(e) => {
+                    setPatInput(e.target.value);
+                    setPatError(null);
+                  }}
+                  placeholder="ghp_…"
+                  className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition font-mono"
+                  autoComplete="off"
+                />
+                {patError && <p className="text-xs text-red-500">{patError}</p>}
                 <Button
-                  variant="outline"
                   className="w-full"
-                  onClick={handleConnectGithub}
+                  onClick={handleConnectWithPat}
+                  disabled={githubBusy || !patInput.trim()}
                 >
-                  <Github className="w-4 h-4 mr-2" />
-                  Connect GitHub
+                  {githubBusy ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Connecting…
+                    </>
+                  ) : (
+                    <>
+                      <Github className="w-4 h-4 mr-2" />
+                      Connect with token
+                    </>
+                  )}
                 </Button>
-                {githubCallbackUrl && (
-                  <div className="rounded-xl border bg-muted/30 p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        In your GitHub OAuth App, set the callback URL to this exact stable URL:
-                      </p>
-                      <button
-                        type="button"
-                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        title="Copy callback URL"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(githubCallbackUrl);
-                          setCallbackCopied(true);
-                          window.setTimeout(() => setCallbackCopied(false), 1500);
-                        }}
-                      >
-                        {callbackCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                    <code className="block mt-2 text-[11px] leading-relaxed break-all text-foreground/80">
-                      {githubCallbackUrl}
-                    </code>
-                    <p className="text-[11px] text-muted-foreground mt-2">
-                      Axis keeps the current preview page as the return destination, so preview URLs can change without changing this GitHub setting.
-                    </p>
-                  </div>
-                )}
               </div>
             )}
           </div>
