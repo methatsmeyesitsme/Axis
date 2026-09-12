@@ -20,15 +20,20 @@ export function toolStatusSummary(
       words = shortPath ? ["Reading", shortPath] : ["Reading", "file"];
       break;
     case "github_write_file":
-      words = shortPath
-        ? [phase === "done" ? "Saved" : "Editing", shortPath]
-        : [phase === "done" ? "Saved", "file" : "Writing", "file"];
+      if (shortPath) {
+        words = [phase === "done" ? "Saved" : "Editing", shortPath];
+      } else {
+        words = phase === "done" ? ["Saved", "file"] : ["Writing", "file"];
+      }
       break;
     case "web_search":
       words = phase === "done" ? ["Finished", "web", "search"] : ["Searching", "the", "web"];
       break;
     case "run_preview":
       words = phase === "done" ? ["Preview", "ready"] : ["Running", "preview"];
+      break;
+    case "image_gen":
+      words = phase === "done" ? ["Image", "ready"] : ["Drawing", "your", "image"];
       break;
     default: {
       const label = name.replace(/^github_/, "").replace(/_/g, " ");
