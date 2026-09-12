@@ -9,8 +9,8 @@
  *   AXIS_AI_PROVIDER=gemini  → Gemini (needs a Gemini key)
  *
  * Local model size:
- *   LOCAL_MODEL_SIZE=1.5b   (default, smarter)
- *   LOCAL_MODEL_SIZE=0.5b   (lighter)
+ *   LOCAL_MODEL_SIZE=0.5b   (default, stable on small instances)
+ *   LOCAL_MODEL_SIZE=1.5b plus LOCAL_MODEL_ALLOW_LARGE=true (smarter, needs more memory)
  */
 
 export type AiProvider = "groq" | "gemini" | "local";

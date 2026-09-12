@@ -78,6 +78,16 @@ function asArguments(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function inlineArguments(parsed: Record<string, unknown> | null): Record<string, unknown> {
+  if (!parsed) return {};
+  const explicit = parsed.arguments ?? parsed.args ?? parsed.parameters;
+  if (explicit !== undefined) return asArguments(explicit);
+  const controlKeys = new Set(["action", "type", "name", "tool", "content", "text"]);
+  return Object.fromEntries(
+    Object.entries(parsed).filter(([key]) => !controlKeys.has(key)),
+  );
+}
+
 /**
  * Ask a small local model to either finish the response or call one known
  * tool. JSON is used instead of pretending the model has native function
@@ -113,15 +123,33 @@ export async function localAgentTurn(
   const action = String(parsed?.action ?? parsed?.type ?? "").toLowerCase();
   const toolName = String(parsed?.name ?? parsed?.tool ?? "").trim();
 
-  if ((action === "tool" || toolName) && tools.some((tool) => tool.name === toolName)) {
+  const aliasedToolName = tools.some((tool) => tool.name === action) ? action : toolName;
+  if (
+    (action === "tool" || toolName || aliasedToolName) &&
+    tools.some((tool) => tool.name === aliasedToolName)
+  ) {
     return {
       kind: "tool",
-      name: toolName,
-      arguments: asArguments(parsed?.arguments ?? parsed?.args ?? parsed?.parameters),
+      name: aliasedToolName,
+      arguments: inlineArguments(parsed),
     };
   }
 
   if (action === "final" && typeof parsed?.content === "string") {
+    const nested = extractJsonObject(parsed.content);
+    const nestedAction = String(nested?.action ?? nested?.type ?? "").toLowerCase();
+    const nestedName = String(nested?.name ?? nested?.tool ?? "").trim();
+    const nestedAliasedName = tools.some((tool) => tool.name === nestedAction) ? nestedAction : nestedName;
+    if (
+      (nestedAction === "tool" || nestedName || nestedAliasedName) &&
+      tools.some((tool) => tool.name === nestedAliasedName)
+    ) {
+      return {
+        kind: "tool",
+        name: nestedAliasedName,
+        arguments: inlineArguments(nested),
+      };
+    }
     return { kind: "final", content: parsed.content.trim() };
   }
 

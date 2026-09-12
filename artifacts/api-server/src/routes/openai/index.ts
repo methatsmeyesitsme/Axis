@@ -257,16 +257,35 @@ router.post("/conversations/:id/messages", async (req, res) => {
       const wantsWebSearch = /\b(search the web|look up|current|latest|today|news|recent|price|weather|stock)\b/i.test(content);
       const localTools = [
         ...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : []),
-        ...(wantsWebSearch ? [{
-          name: "web_search",
-          description: "Search the live web for current information and return source URLs.",
-          parameters: {
-            type: "object",
-            properties: { query: { type: "string", description: "The focused web search query" } },
-            required: ["query"],
-          },
-        }] : []),
       ];
+
+      if (wantsWebSearch) {
+        const toolId = `${Date.now()}-web-search`;
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: "Searched the live web" } })}\n\n`);
+        }
+        try {
+          const search = await localWebSearch(content);
+          for (const source of search.sources) sources.push({ url: source.url, title: source.title });
+          workingMessages.push({
+            role: "user",
+            content: [
+              "Authoritative live web search results. Use these results rather than inventing current facts.",
+              JSON.stringify(search.sources),
+              "Cite relevant URLs in the answer.",
+            ].join("\n"),
+          });
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolDone: { id: toolId, summary: "Searched the live web" } })}\n\n`);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          workingMessages.push({ role: "user", content: `The live web search failed: ${message}. Say that current sources were unavailable.` });
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolError: { id: toolId, summary: "Searched the live web", error: message } })}\n\n`);
+          }
+        }
+      }
 
       if (localTools.length === 0) {
         reply = await localGenerate(workingMessages, { maxNewTokens: 1400, maxMessages: 8, maxCharsPerMessage: 2400 });
@@ -284,15 +303,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
           }
 
           let result: { output?: unknown; error?: string };
-          if (decision.name === "web_search") {
-            try {
-              const search = await localWebSearch(String(decision.arguments.query ?? ""));
-              result = { output: search.sources };
-              for (const source of search.sources) sources.push({ url: source.url, title: source.title });
-            } catch (error) {
-              result = { error: error instanceof Error ? error.message : String(error) };
-            }
-          } else if (userId && (await isGithubReady(userId))) {
+          if (userId && (await isGithubReady(userId))) {
             result = await executeGithubTool(userId, decision.name, decision.arguments);
           } else {
             result = { error: "No GitHub repository is connected/selected. Ask the person to connect GitHub and pick a repo in Settings." };

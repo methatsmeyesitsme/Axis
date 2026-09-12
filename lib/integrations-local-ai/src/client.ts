@@ -9,7 +9,8 @@ let loadedModelId: string | null = null;
  *
  * Qwen Coder is a better fit for Axis than the general instruct checkpoint:
  * it uses the same local runtime, but follows code and structured output
- * instructions more reliably. Use LOCAL_MODEL_SIZE=0.5b if memory is tight.
+ * instructions more reliably. The 0.5B checkpoint is the stable default for
+ * Replit's memory budget; use LOCAL_MODEL_SIZE=1.5b on a larger machine.
  */
 const MODELS = {
   "0.5b": "onnx-community/Qwen2.5-Coder-0.5B-Instruct",
@@ -19,9 +20,14 @@ const MODELS = {
 type LocalModelSize = keyof typeof MODELS;
 
 function getModelSize(): LocalModelSize {
-  const raw = (process.env.LOCAL_MODEL_SIZE || "1.5b").toLowerCase().trim();
-  if (raw === "0.5b" || raw === "0.5") return "0.5b";
-  return "1.5b";
+  const raw = (process.env.LOCAL_MODEL_SIZE || "0.5b").toLowerCase().trim();
+  if (
+    (raw === "1.5b" || raw === "1.5") &&
+    process.env.LOCAL_MODEL_ALLOW_LARGE?.toLowerCase().trim() === "true"
+  ) {
+    return "1.5b";
+  }
+  return "0.5b";
 }
 
 function getModelId(): string {
