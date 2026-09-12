@@ -1,30 +1,59 @@
 import { pipeline, type TextGenerationPipeline } from "@huggingface/transformers";
 
-let generator: TextGenerationPipeline | null = null;
-let loading: Promise<TextGenerationPipeline> | null = null;
-let loadedModelId: string | null = null;
-let loadFailed = false;
-
 const MODELS = {
   "0.5b": "onnx-community/Qwen2.5-Coder-0.5B-Instruct",
   "1.5b": "onnx-community/Qwen2.5-Coder-1.5B-Instruct",
 } as const;
 
-type LocalModelSize = keyof typeof MODELS;
+export type LocalModelSize = keyof typeof MODELS;
 
-function getModelSize(): LocalModelSize {
-  const raw = (process.env.LOCAL_MODEL_SIZE || "0.5b").toLowerCase().trim();
-  if (
-    (raw === "1.5b" || raw === "1.5") &&
-    process.env.LOCAL_MODEL_ALLOW_LARGE?.toLowerCase().trim() === "true"
-  ) {
-    return "1.5b";
-  }
+/** Cache one pipeline per size so we can switch without always reloading. */
+const generators: Partial<Record<LocalModelSize, TextGenerationPipeline>> = {};
+const loading: Partial<Record<LocalModelSize, Promise<TextGenerationPipeline>>> = {};
+const loadFailed: Partial<Record<LocalModelSize, boolean>> = {};
+/** After 1.5B fails once (OOM), stop trying it this process. */
+let largeDisabled = false;
+
+function largeAllowed(): boolean {
+  if (largeDisabled) return false;
+  // Opt-out: LOCAL_MODEL_ALLOW_LARGE=false forces 0.5b only
+  const flag = process.env.LOCAL_MODEL_ALLOW_LARGE?.toLowerCase().trim();
+  if (flag === "false" || flag === "0" || flag === "no") return false;
+  // Default: allow auto 1.5b for big requests (falls back to 0.5b on failure)
+  return true;
+}
+
+/**
+ * Pick model size from the request:
+ * - greetings / short chat → 0.5b (fast)
+ * - longer or code-heavy → 1.5b when allowed
+ * - LOCAL_MODEL_SIZE=0.5b forces small always
+ * - LOCAL_MODEL_SIZE=1.5b + ALLOW_LARGE forces large when possible
+ */
+export function pickModelSize(userText: string, options?: { fast?: boolean }): LocalModelSize {
+  const forced = (process.env.LOCAL_MODEL_SIZE || "").toLowerCase().trim();
+  if (forced === "0.5b" || forced === "0.5") return "0.5b";
+  if ((forced === "1.5b" || forced === "1.5") && largeAllowed()) return "1.5b";
+
+  const text = (userText || "").trim();
+  if (options?.fast || isGreeting(text) || isShortRequest(text)) return "0.5b";
+
+  // Big / coding request
+  if (largeAllowed()) return "1.5b";
   return "0.5b";
 }
 
-function getModelId(): string {
-  return MODELS[getModelSize()];
+export function isShortRequest(text: string): boolean {
+  const t = text.trim();
+  if (t.length <= 80) return true;
+  if (t.split(/\s+/).length <= 12 && !/```|function |class |def |import |error|bug|fix/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+export function isGreeting(text: string): boolean {
+  return /^(hi|hello|hey|yo|sup|hiya|good (morning|afternoon|evening))[!.?\s]*$/i.test(text.trim());
 }
 
 function extractGeneratedText(value: unknown): string {
@@ -74,17 +103,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-async function getGenerator(): Promise<TextGenerationPipeline> {
-  const modelId = getModelId();
+async function getGenerator(size: LocalModelSize): Promise<TextGenerationPipeline> {
+  const modelId = MODELS[size];
 
-  if (generator && loadedModelId === modelId) return generator;
-  if (loadFailed && loadedModelId === modelId) {
-    throw new Error("Local model failed to load earlier. Restart the Repl and try again.");
+  if (generators[size]) return generators[size]!;
+  if (loadFailed[size]) {
+    throw new Error(`Local ${size} model failed to load earlier. Restart the Repl.`);
   }
 
-  if (!loading || loadedModelId !== modelId) {
-    loading = (async () => {
-      console.log(`[local-ai] Loading ${modelId} (first run can take a while)...`);
+  if (!loading[size]) {
+    loading[size] = (async () => {
+      console.log(`[local-ai] Loading ${modelId} (${size})...`);
       const t0 = Date.now();
       try {
         const pipe = await withTimeout(
@@ -93,31 +122,29 @@ async function getGenerator(): Promise<TextGenerationPipeline> {
             device: "cpu",
           }) as Promise<TextGenerationPipeline>,
           180_000,
-          "Model load",
+          `Model load (${size})`,
         );
-        console.log(`[local-ai] Model loaded in ${Date.now() - t0}ms`);
-        generator = pipe;
-        loadedModelId = modelId;
-        loadFailed = false;
-        return generator;
+        console.log(`[local-ai] ${size} loaded in ${Date.now() - t0}ms`);
+        generators[size] = pipe;
+        loadFailed[size] = false;
+        return pipe;
       } catch (err) {
-        loadFailed = true;
-        loadedModelId = modelId;
-        loading = null;
-        generator = null;
-        console.error("[local-ai] load failed", err);
+        loadFailed[size] = true;
+        delete loading[size];
+        if (size === "1.5b") largeDisabled = true;
+        console.error(`[local-ai] ${size} load failed`, err);
         throw err;
       }
     })();
   }
 
-  return loading;
+  return loading[size]!;
 }
 
-/** Optional warm-up — safe to call; never crashes the process. */
+/** Warm only the small model so first chat is faster without risking OOM. */
 export async function preloadLocalModel(): Promise<void> {
   try {
-    await getGenerator();
+    await getGenerator("0.5b");
   } catch (err) {
     console.error("[local-ai] preload failed (non-fatal)", err);
   }
@@ -133,19 +160,6 @@ export function buildLocalSystemPrompt(language: string): string {
   ].join(" ");
 }
 
-export function isShortRequest(text: string): boolean {
-  const t = text.trim();
-  if (t.length <= 80) return true;
-  if (t.split(/\s+/).length <= 12 && !/```|function |class |def |import |error|bug|fix/.test(t)) {
-    return true;
-  }
-  return false;
-}
-
-export function isGreeting(text: string): boolean {
-  return /^(hi|hello|hey|yo|sup|hiya|good (morning|afternoon|evening))[!.?\s]*$/i.test(text.trim());
-}
-
 function resolveBudgets(
   messages: Array<{ role: string; content: string }>,
   options: {
@@ -154,8 +168,8 @@ function resolveBudgets(
     maxCharsPerMessage?: number;
     fast?: boolean;
   },
+  size: LocalModelSize,
 ) {
-  const size = getModelSize();
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const greeting = isGreeting(lastUser);
   const fast = options.fast ?? (greeting || isShortRequest(lastUser));
@@ -165,11 +179,47 @@ function resolveBudgets(
     greeting,
     maxMessages: options.maxMessages ?? (greeting ? 2 : fast ? 3 : size === "1.5b" ? 6 : 4),
     maxChars: options.maxCharsPerMessage ?? (greeting ? 300 : fast ? 500 : size === "1.5b" ? 1200 : 800),
-    // Keep generation budgets modest on Replit CPU to avoid 502 timeouts
     maxNewTokens:
       options.maxNewTokens ??
       (greeting ? 40 : fast ? 80 : size === "1.5b" ? 512 : 256),
   };
+}
+
+async function runOnce(
+  size: LocalModelSize,
+  messages: Array<{ role: string; content: string }>,
+  options: {
+    maxNewTokens?: number;
+    maxMessages?: number;
+    maxCharsPerMessage?: number;
+    fast?: boolean;
+  },
+): Promise<string> {
+  const pipe = await getGenerator(size);
+  const { maxMessages, maxChars, maxNewTokens } = resolveBudgets(messages, options, size);
+
+  const trimmed = messages.slice(-maxMessages).map((m) => ({
+    role: m.role,
+    content: String(m.content).slice(0, maxChars),
+  }));
+
+  const result = await withTimeout(
+    Promise.resolve(
+      pipe(trimmed, {
+        max_new_tokens: maxNewTokens,
+        do_sample: false,
+        temperature: 0.15,
+      }),
+    ) as Promise<unknown>,
+    size === "1.5b" ? 120_000 : 90_000,
+    `Local generation (${size})`,
+  );
+
+  const raw = Array.isArray(result) ? result[0] : result;
+  const generated = extractGeneratedText(
+    (raw as { generated_text?: unknown })?.generated_text ?? raw,
+  );
+  return stripAssistantPrefix(generated);
 }
 
 export async function localGenerate(
@@ -181,39 +231,36 @@ export async function localGenerate(
     fast?: boolean;
   } = {},
 ): Promise<string> {
+  const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  let size = pickModelSize(lastUser, { fast: options.fast });
+
   try {
-    const pipe = await getGenerator();
-    const { maxMessages, maxChars, maxNewTokens } = resolveBudgets(messages, options);
-
-    const trimmed = messages.slice(-maxMessages).map((m) => ({
-      role: m.role,
-      content: String(m.content).slice(0, maxChars),
-    }));
-
-    const result = await withTimeout(
-      Promise.resolve(
-        pipe(trimmed, {
-          max_new_tokens: maxNewTokens,
-          do_sample: false,
-          temperature: 0.15,
-        }),
-      ) as Promise<unknown>,
-      90_000,
-      "Local generation",
-    );
-
-    const raw = Array.isArray(result) ? result[0] : result;
-    const generated = extractGeneratedText(
-      (raw as { generated_text?: unknown })?.generated_text ?? raw,
-    );
-    return stripAssistantPrefix(generated);
+    console.log(`[local-ai] using ${size} for this request`);
+    return await runOnce(size, messages, options);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[local-ai] generate failed", msg);
+    console.error(`[local-ai] ${size} generate failed`, msg);
+
+    // Fall back 1.5b → 0.5b on OOM / load failure
+    if (size === "1.5b") {
+      largeDisabled = true;
+      console.log("[local-ai] falling back to 0.5b");
+      try {
+        return await runOnce("0.5b", messages, { ...options, fast: true });
+      } catch (err2) {
+        const msg2 = err2 instanceof Error ? err2.message : String(err2);
+        throw new Error(
+          msg2.includes("timed out")
+            ? msg2
+            : "Local model ran out of memory. Restart the Repl and keep messages shorter.",
+        );
+      }
+    }
+
     throw new Error(
       msg.includes("timed out")
         ? msg
-        : "Local model ran out of memory or crashed. Restart the Repl, keep messages short, and use LOCAL_MODEL_SIZE=0.5b.",
+        : "Local model ran out of memory or crashed. Restart the Repl and try a shorter message.",
     );
   }
 }
@@ -228,7 +275,9 @@ export async function localGenerateStreaming(
     onToken?: (chunk: string) => void;
   } = {},
 ): Promise<string> {
-  const { greeting, fast } = resolveBudgets(messages, options);
+  const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const size = pickModelSize(lastUser, { fast: options.fast });
+  const { greeting, fast } = resolveBudgets(messages, options, size);
   const assembled = await localGenerate(messages, options);
 
   if (options.onToken && assembled) {
@@ -243,5 +292,8 @@ export async function localGenerateStreaming(
   return assembled;
 }
 
-export const LOCAL_MODEL_ID = getModelId();
-export { getModelSize };
+export function getModelSize(): LocalModelSize {
+  return pickModelSize("");
+}
+
+export const LOCAL_MODEL_ID = MODELS["0.5b"];
