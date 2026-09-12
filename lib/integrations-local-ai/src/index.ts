@@ -7,6 +7,7 @@ export {
   isGreeting,
   LOCAL_MODEL_ID,
   getModelSize,
+  pickModelSize,
 } from "./client";
 export {
   localAgentTurn,
@@ -21,3 +22,8 @@ export {
   type LocalSearchResult,
   type LocalSearchSource,
 } from "./web-search";
+export {
+  wantsImageGeneration,
+  extractImagePrompt,
+  localGenerateImage,
+} from "./local-image";
