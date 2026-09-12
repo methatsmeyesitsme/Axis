@@ -49,7 +49,6 @@ export default function Home() {
   const [showAuth, setShowAuth] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("codex");
-  // Shared across tabs: open stays open after swipe, closed stays closed
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const { user, isLoading } = useAuth();
 
@@ -92,7 +91,6 @@ export default function Home() {
     };
 
     const beginDrag = (clientX: number, clientY: number) => {
-      // Allow swipe even when menu is open — open state is preserved across tabs
       state.status = "pending";
       state.startX = clientX;
       state.startY = clientY;
@@ -218,7 +216,6 @@ export default function Home() {
     <div className="relative h-[100dvh] w-full overflow-hidden bg-background">
       {activeTab === "cortex" ? (
         <div className="h-full w-full flex flex-col min-w-0 relative">
-          {/* Cortex has its own menu button (not in swipe track) */}
           {sidebarCollapsed && (
             <div className="absolute top-3 left-2 z-20">
               <MenuToggle onClick={toggleSidebar} />
@@ -249,7 +246,6 @@ export default function Home() {
             className="flex h-full shrink-0"
             style={{ width: "200%", touchAction: "pan-y", x }}
           >
-            {/* Codex pane — own menu button that moves with swipe */}
             <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
               {sidebarCollapsed && (
                 <div className="absolute top-3 left-2 z-20">
@@ -277,7 +273,6 @@ export default function Home() {
               />
             </div>
 
-            {/* Forge pane — own menu button that moves with swipe */}
             <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
               {sidebarCollapsed && (
                 <div className="absolute top-3 left-2 z-20">
@@ -306,7 +301,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Dim backdrop */}
       <motion.button
         type="button"
         aria-label="Close sidebar"
@@ -320,63 +314,58 @@ export default function Home() {
         transition={{ duration: 0.22 }}
       />
 
-      {/* Rounded overlay drawer + edge-only fading shadow + menu on its right */}
       <motion.div
         initial={false}
         animate={{ x: openSidebar ? 0 : -300 }}
         transition={{ type: "spring", stiffness: 420, damping: 36 }}
         className="fixed top-2 bottom-2 left-0 z-50 flex items-stretch pointer-events-none"
       >
-        <aside
-          className="relative pointer-events-auto h-full w-72 rounded-r-2xl border border-l-0 bg-sidebar overflow-hidden"
-          style={{
-            boxShadow:
-              "8px 0 20px -8px rgba(0,0,0,0.12), 16px 0 40px -12px rgba(0,0,0,0.08)",
-          }}
-        >
-          {/* Soft gradient fade only along the right edge */}
+        <aside className="relative pointer-events-auto h-full w-72 rounded-r-2xl border border-l-0 bg-sidebar overflow-visible">
+          {/* Thin shadow strip outside the right edge only */}
           <div
-            className="pointer-events-none absolute top-0 right-0 bottom-0 w-10"
+            aria-hidden
+            className="pointer-events-none absolute top-0 bottom-0 left-full w-2.5 rounded-r-sm"
             style={{
               background:
-                "linear-gradient(to right, transparent, rgba(0,0,0,0.04) 40%, rgba(0,0,0,0.07))",
+                "linear-gradient(to right, rgba(0,0,0,0.16), rgba(0,0,0,0.06) 50%, transparent)",
             }}
           />
-          {activeTab === "forge" ? (
-            <ForgeSidebar
-              activeForgeConversationId={activeForgeConversationId}
-              onSelectForgeConversation={(id) => {
-                setActiveForgeConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              onOpenSettings={() => {
-                setShowSettings(true);
-                setSidebarCollapsed(true);
-              }}
-            />
-          ) : (
-            <Sidebar
-              activeConversationId={activeConversationId}
-              onSelectConversation={(id) => {
-                setActiveConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              activeCortexConversationId={activeCortexConversationId}
-              onSelectCortexConversation={(id) => {
-                setActiveCortexConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              onOpenSettings={() => {
-                setShowSettings(true);
-                setSidebarCollapsed(true);
-              }}
-              activeTab={activeTab === "cortex" ? "cortex" : "codex"}
-              onTabChange={(tab) => setActiveTab(tab)}
-            />
-          )}
+          <div className="h-full w-full overflow-hidden rounded-r-2xl">
+            {activeTab === "forge" ? (
+              <ForgeSidebar
+                activeForgeConversationId={activeForgeConversationId}
+                onSelectForgeConversation={(id) => {
+                  setActiveForgeConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                onOpenSettings={() => {
+                  setShowSettings(true);
+                  setSidebarCollapsed(true);
+                }}
+              />
+            ) : (
+              <Sidebar
+                activeConversationId={activeConversationId}
+                onSelectConversation={(id) => {
+                  setActiveConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                activeCortexConversationId={activeCortexConversationId}
+                onSelectCortexConversation={(id) => {
+                  setActiveCortexConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                onOpenSettings={() => {
+                  setShowSettings(true);
+                  setSidebarCollapsed(true);
+                }}
+                activeTab={activeTab === "cortex" ? "cortex" : "codex"}
+                onTabChange={(tab) => setActiveTab(tab)}
+              />
+            )}
+          </div>
         </aside>
 
-        {/* 3-line button always on the right of the open menu */}
         {openSidebar && (
           <div className="pointer-events-auto flex items-start pt-1 pl-2">
             <MenuToggle onClick={toggleSidebar} />
