@@ -1,6 +1,7 @@
 export {
   localGenerate,
   buildLocalSystemPrompt,
+  isShortRequest,
   LOCAL_MODEL_ID,
   getModelSize,
 } from "./client";
