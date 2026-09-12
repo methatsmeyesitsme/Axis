@@ -301,18 +301,15 @@ export default function Home() {
         </div>
       )}
 
-      <motion.button
-        type="button"
-        aria-label="Close sidebar"
-        onClick={() => setSidebarCollapsed(true)}
-        className="fixed inset-0 z-40 bg-black/35"
-        initial={false}
-        animate={{
-          opacity: openSidebar ? 1 : 0,
-          pointerEvents: openSidebar ? "auto" : "none",
-        }}
-        transition={{ duration: 0.22 }}
-      />
+      {/* Invisible hit target — closes menu on tap outside, no gray overlay */}
+      {openSidebar && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          onClick={() => setSidebarCollapsed(true)}
+          className="fixed inset-0 z-40 bg-transparent"
+        />
+      )}
 
       <motion.div
         initial={false}
@@ -321,13 +318,13 @@ export default function Home() {
         className="fixed top-2 bottom-2 left-0 z-50 flex items-stretch pointer-events-none"
       >
         <aside className="relative pointer-events-auto h-full w-72 rounded-r-2xl border border-l-0 bg-sidebar overflow-visible">
-          {/* Thin shadow strip outside the right edge only */}
+          {/* Slightly thicker edge shadow: darkest at menu edge, fades out */}
           <div
             aria-hidden
-            className="pointer-events-none absolute top-0 bottom-0 left-full w-2.5 rounded-r-sm"
+            className="pointer-events-none absolute top-0 bottom-0 left-full w-5"
             style={{
               background:
-                "linear-gradient(to right, rgba(0,0,0,0.16), rgba(0,0,0,0.06) 50%, transparent)",
+                "linear-gradient(to right, rgba(0,0,0,0.18), rgba(0,0,0,0.08) 35%, rgba(0,0,0,0.03) 70%, transparent)",
             }}
           />
           <div className="h-full w-full overflow-hidden rounded-r-2xl">
