@@ -6,11 +6,8 @@ let loadedModelId: string | null = null;
 
 /**
  * Free local models (ONNX / transformers.js).
- *
- * Qwen Coder is a better fit for Axis than the general instruct checkpoint:
- * it uses the same local runtime, but follows code and structured output
- * instructions more reliably. The 0.5B checkpoint is the stable default for
- * Replit's memory budget; use LOCAL_MODEL_SIZE=1.5b on a larger machine.
+ * Qwen Coder is a better fit for Axis than the general instruct checkpoint.
+ * 0.5B is the stable default for Replit memory; 1.5B needs LOCAL_MODEL_ALLOW_LARGE=true.
  */
 const MODELS = {
   "0.5b": "onnx-community/Qwen2.5-Coder-0.5B-Instruct",
@@ -80,39 +77,49 @@ async function getGenerator(): Promise<TextGenerationPipeline> {
   return loading;
 }
 
-/**
- * Short, high-signal system prompt for small local models.
- * Focused on coding quality over long instructions.
- */
+/** Short system prompt for small local models. */
 export function buildLocalSystemPrompt(language: string): string {
   return [
     `You are Axis, an expert ${language} coding assistant.`,
-    "Write correct, clean, production-quality code.",
-    "When debugging: state the bug, explain why, then show the fixed code.",
-    "When generating code: use proper syntax, brief comments, and explain key parts after.",
-    "Always put code in markdown fences with the correct language tag.",
-    "Be concise and accurate. Prefer working solutions over long explanations.",
+    "Be clear, accurate, and concise.",
+    "For code: use correct syntax, brief comments, and markdown fences with the language tag.",
+    "For bugs: name the issue, explain why, then show the fix.",
+    "Never invent tool JSON or API schemas. Answer in normal language unless the user asks for code.",
   ].join(" ");
 }
 
-/**
- * Generate with the local model. Context is kept small so quality stays high.
- */
+/** Heuristic: short / simple user messages get a faster, smaller generation budget. */
+export function isShortRequest(text: string): boolean {
+  const t = text.trim();
+  if (t.length <= 80) return true;
+  if (t.split(/\s+/).length <= 12 && !/```|function |class |def |import |error|bug|fix/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
 export async function localGenerate(
   messages: Array<{ role: string; content: string }>,
   options: {
     maxNewTokens?: number;
     maxMessages?: number;
     maxCharsPerMessage?: number;
+    fast?: boolean;
   } = {},
 ): Promise<string> {
   const pipe = await getGenerator();
   const size = getModelSize();
 
-  // Slightly more room for the 1.5B model
-  const maxMessages = options.maxMessages ?? (size === "1.5b" ? 8 : 4);
-  const maxChars = options.maxCharsPerMessage ?? (size === "1.5b" ? 1600 : 1000);
-  const defaultTokens = size === "1.5b" ? 1024 : 384;
+  const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const fast = options.fast ?? isShortRequest(lastUser);
+
+  const maxMessages =
+    options.maxMessages ?? (fast ? 3 : size === "1.5b" ? 8 : 4);
+  const maxChars =
+    options.maxCharsPerMessage ?? (fast ? 600 : size === "1.5b" ? 1600 : 1000);
+  const defaultTokens =
+    options.maxNewTokens ??
+    (fast ? 120 : size === "1.5b" ? 768 : 384);
 
   const trimmed = messages.slice(-maxMessages).map((m) => ({
     role: m.role,
@@ -120,7 +127,7 @@ export async function localGenerate(
   }));
 
   const result = await pipe(trimmed, {
-    max_new_tokens: options.maxNewTokens ?? defaultTokens,
+    max_new_tokens: defaultTokens,
     do_sample: false,
     temperature: 0.15,
   });
