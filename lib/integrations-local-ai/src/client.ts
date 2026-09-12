@@ -16,20 +16,11 @@ let largeDisabled = false;
 
 function largeAllowed(): boolean {
   if (largeDisabled) return false;
-  // Opt-out: LOCAL_MODEL_ALLOW_LARGE=false forces 0.5b only
   const flag = process.env.LOCAL_MODEL_ALLOW_LARGE?.toLowerCase().trim();
   if (flag === "false" || flag === "0" || flag === "no") return false;
-  // Default: allow auto 1.5b for big requests (falls back to 0.5b on failure)
   return true;
 }
 
-/**
- * Pick model size from the request:
- * - greetings / short chat → 0.5b (fast)
- * - longer or code-heavy → 1.5b when allowed
- * - LOCAL_MODEL_SIZE=0.5b forces small always
- * - LOCAL_MODEL_SIZE=1.5b + ALLOW_LARGE forces large when possible
- */
 export function pickModelSize(userText: string, options?: { fast?: boolean }): LocalModelSize {
   const forced = (process.env.LOCAL_MODEL_SIZE || "").toLowerCase().trim();
   if (forced === "0.5b" || forced === "0.5") return "0.5b";
@@ -37,8 +28,6 @@ export function pickModelSize(userText: string, options?: { fast?: boolean }): L
 
   const text = (userText || "").trim();
   if (options?.fast || isGreeting(text) || isShortRequest(text)) return "0.5b";
-
-  // Big / coding request
   if (largeAllowed()) return "1.5b";
   return "0.5b";
 }
@@ -46,7 +35,7 @@ export function pickModelSize(userText: string, options?: { fast?: boolean }): L
 export function isShortRequest(text: string): boolean {
   const t = text.trim();
   if (t.length <= 80) return true;
-  if (t.split(/\s+/).length <= 12 && !/```|function |class |def |import |error|bug|fix/.test(t)) {
+  if (t.split(/\s+/).length <= 12 && !/```|function |class |def |import |error|bug|fix|github|repo|pull from/i.test(t)) {
     return true;
   }
   return false;
@@ -141,7 +130,6 @@ async function getGenerator(size: LocalModelSize): Promise<TextGenerationPipelin
   return loading[size]!;
 }
 
-/** Warm only the small model so first chat is faster without risking OOM. */
 export async function preloadLocalModel(): Promise<void> {
   try {
     await getGenerator("0.5b");
@@ -152,11 +140,14 @@ export async function preloadLocalModel(): Promise<void> {
 
 export function buildLocalSystemPrompt(language: string): string {
   return [
-    `You are Axis, an expert ${language} coding assistant.`,
+    `You are Axis, a helpful expert ${language} coding assistant.`,
+    "Always try to help with coding, repos, GitHub, files, and explanations.",
+    "Never refuse normal coding or repository questions. Never say you can't assist with that for coding tasks.",
     "Be clear, accurate, and concise.",
-    "For code: use correct syntax, brief comments, and markdown fences with the language tag.",
+    "For code: use correct syntax and markdown fences with the language tag.",
     "For bugs: name the issue, explain why, then show the fix.",
-    "Never invent tool JSON or API schemas. Answer in normal language unless the user asks for code.",
+    "When tools are available, use them to inspect repos instead of guessing.",
+    "Never invent tool JSON or API schemas in your final answer.",
   ].join(" ");
 }
 
@@ -222,6 +213,17 @@ async function runOnce(
   return stripAssistantPrefix(generated);
 }
 
+function looksLikeHardRefusal(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (t.length > 220) return false;
+  return (
+    /i('m| am) sorry, but i can'?t assist/.test(t) ||
+    /i can'?t (help|assist) with that/.test(t) ||
+    /as an ai (language )?model, i (can'?t|cannot)/.test(t) ||
+    /^i can'?t assist with that\.?$/.test(t)
+  );
+}
+
 export async function localGenerate(
   messages: Array<{ role: string; content: string }>,
   options: {
@@ -236,12 +238,34 @@ export async function localGenerate(
 
   try {
     console.log(`[local-ai] using ${size} for this request`);
-    return await runOnce(size, messages, options);
+    let out = await runOnce(size, messages, options);
+
+    // Small models sometimes hard-refuse coding/repo asks — one forced retry
+    if (looksLikeHardRefusal(out)) {
+      console.log("[local-ai] refusal detected, retrying with stronger instruction");
+      out = await runOnce(
+        size,
+        [
+          ...messages,
+          {
+            role: "user",
+            content:
+              "You must help. This is a normal coding or repository question. Do not refuse. Answer helpfully in plain language.",
+          },
+        ],
+        { ...options, fast: false, maxNewTokens: Math.max(options.maxNewTokens ?? 0, 256) },
+      );
+      if (looksLikeHardRefusal(out)) {
+        out =
+          "I can help with that. Tell me what you want to know about the code or repo (files, what it does, how to change something), and I will dig in.";
+      }
+    }
+
+    return out;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[local-ai] ${size} generate failed`, msg);
 
-    // Fall back 1.5b → 0.5b on OOM / load failure
     if (size === "1.5b") {
       largeDisabled = true;
       console.log("[local-ai] falling back to 0.5b");
