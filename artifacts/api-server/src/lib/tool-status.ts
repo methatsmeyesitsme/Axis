@@ -1,0 +1,45 @@
+/**
+ * Build a short, satisfying status line for tool activity.
+ * Hard limit: 5 words.
+ */
+export function toolStatusSummary(
+  name: string,
+  args: Record<string, unknown> = {},
+  phase: "start" | "done" | "error" = "start",
+): string {
+  const path = String(args.path ?? args.file ?? args.filename ?? "").replace(/^\/+/, "");
+  const shortPath = path ? path.split("/").pop() || path : "";
+
+  let words: string[];
+
+  switch (name) {
+    case "github_list_files":
+      words = path ? ["Listing", shortPath, "files"] : ["Listing", "repo", "files"];
+      break;
+    case "github_read_file":
+      words = shortPath ? ["Reading", shortPath] : ["Reading", "file"];
+      break;
+    case "github_write_file":
+      words = shortPath
+        ? [phase === "done" ? "Saved" : "Editing", shortPath]
+        : [phase === "done" ? "Saved", "file" : "Writing", "file"];
+      break;
+    case "web_search":
+      words = phase === "done" ? ["Finished", "web", "search"] : ["Searching", "the", "web"];
+      break;
+    case "run_preview":
+      words = phase === "done" ? ["Preview", "ready"] : ["Running", "preview"];
+      break;
+    default: {
+      const label = name.replace(/^github_/, "").replace(/_/g, " ");
+      words = phase === "done" ? ["Done", label] : ["Using", label];
+      break;
+    }
+  }
+
+  if (phase === "error") {
+    words = ["Failed", ...words.slice(0, 4)];
+  }
+
+  return words.filter(Boolean).slice(0, 5).join(" ");
+}
