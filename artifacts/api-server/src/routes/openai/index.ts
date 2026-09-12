@@ -3,10 +3,13 @@ import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
 import {
   localGenerate,
+  localGenerateStreaming,
   localAgentTurn,
   buildLocalToolResultMessage,
   buildLocalSystemPrompt,
   isShortRequest,
+  isGreeting,
+  preloadLocalModel,
   localWebSearch,
   toLocalToolDefinitions,
   type LocalChatMessage,
@@ -15,6 +18,9 @@ import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
+
+// Warm local model in the background so first chat is faster
+void preloadLocalModel();
 
 const router: IRouter = Router();
 
@@ -230,6 +236,10 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.flushHeaders();
 
     try {
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ status: "thinking" })}\n\n`);
+      }
+
       const localSystem = [
         buildLocalSystemPrompt(convLanguage),
         memoryBlock ? `Known about this user:\n${memoryBlock.slice(0, 400)}` : "",
@@ -238,7 +248,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
       ].filter(Boolean).join("\n\n");
 
       const short = isShortRequest(content);
-      const historySlice = short ? history.slice(-2) : history.slice(-4);
+      const greeting = isGreeting(content);
+      const historySlice = greeting || short ? history.slice(-2) : history.slice(-4);
       const localMessages: LocalChatMessage[] = [
         { role: "system", content: localSystem },
         ...historySlice.map((m): LocalChatMessage => ({
@@ -246,9 +257,9 @@ router.post("/conversations/:id/messages", async (req, res) => {
           content: m.content
             .replace(/\[IMAGE:[^\]]*\]/g, "[image]")
             .replace(/\[FILEDATA:[^\]]*\]/g, "[file]")
-            .slice(0, short ? 500 : 1200),
+            .slice(0, greeting ? 300 : short ? 500 : 1200),
         })),
-        { role: "user", content: content.slice(0, short ? 800 : 1600) },
+        { role: "user", content: content.slice(0, greeting ? 200 : short ? 800 : 1600) },
       ];
       const workingMessages = [...localMessages];
       let reply = "";
@@ -285,11 +296,16 @@ router.post("/conversations/:id/messages", async (req, res) => {
       }
 
       if (localTools.length === 0) {
-        reply = await localGenerate(workingMessages, {
-          fast: short,
-          maxNewTokens: short ? 160 : 900,
-          maxMessages: short ? 3 : 6,
-          maxCharsPerMessage: short ? 600 : 1400,
+        reply = await localGenerateStreaming(workingMessages, {
+          fast: short || greeting,
+          maxNewTokens: greeting ? 48 : short ? 96 : 900,
+          maxMessages: greeting ? 2 : short ? 3 : 6,
+          maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
+          onToken: (chunk) => {
+            if (!res.writableEnded && chunk) {
+              res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+            }
+          },
         });
       } else {
         for (let turn = 0; turn < 3; turn++) {
@@ -325,11 +341,23 @@ router.post("/conversations/:id/messages", async (req, res) => {
           workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
         }
         if (!reply) {
-          reply = await localGenerate(workingMessages, {
+          reply = await localGenerateStreaming(workingMessages, {
             maxNewTokens: 500,
             maxMessages: 6,
             maxCharsPerMessage: 1200,
+            onToken: (chunk) => {
+              if (!res.writableEnded && chunk) {
+                res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+              }
+            },
           });
+        } else if (!res.writableEnded) {
+          // tool-path final answer: type it out quickly
+          const step = 8;
+          for (let i = 0; i < reply.length; i += step) {
+            res.write(`data: ${JSON.stringify({ content: reply.slice(i, i + step) })}\n\n`);
+            await new Promise((r) => setTimeout(r, 10));
+          }
         }
       }
 
@@ -349,15 +377,14 @@ router.post("/conversations/:id/messages", async (req, res) => {
         res.write(`data: ${JSON.stringify({ sources })}\n\n`);
       }
 
-      if (history.length === 0 && userId && id > 0) {
+      if (history.length === 0 && userId && id > 0 && !greeting) {
         const newTitle = await generateTitle(content, req.log);
         await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
       }
-      if (userId) extractAndSaveMemories(userId, content).catch(() => {});
+      if (userId && !greeting) extractAndSaveMemories(userId, content).catch(() => {});
 
       if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ content: savedContent })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       }
 
