@@ -30,19 +30,9 @@ export default function Home() {
   const [showAuth, setShowAuth] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("codex");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const { user, isLoading } = useAuth();
 
-  // Fully manual swipe using raw Touch Events (+ mouse events for desktop),
-  // not the Pointer Events API and not framer-motion's `drag` prop. Touch
-  // Events are the older, far more consistently-supported API across mobile
-  // WebViews (including WebKit/iOS) — Pointer Events, while the modern
-  // standard, have historically had less reliable support in some embedded
-  // webviews, which is the likely reason swipe worked in Chromium-based
-  // testing but not in Replit's actual mobile app shell. `x` is a plain pixel
-  // motion value driven directly; listeners are attached natively with
-  // {passive:false} on touchmove so preventDefault reliably stops native
-  // scroll during a horizontal drag.
   const swipeTrackRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const activeTabRef = useRef<Tab>(activeTab);
@@ -99,7 +89,6 @@ export default function Home() {
       if (state.status === "pending") {
         if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
         if (Math.abs(dy) > Math.abs(dx)) {
-          // Vertical intent — this isn't a pane swipe, let native scroll handle it.
           state.status = "idle";
           return;
         }
@@ -143,7 +132,6 @@ export default function Home() {
       snapTo(nextTab);
     };
 
-    // ── Touch (primary — mobile) ──────────────────────────────────────────
     let lastTouchTime = 0;
     const onTouchStart = (e: TouchEvent) => {
       lastTouchTime = Date.now();
@@ -165,16 +153,6 @@ export default function Home() {
       state.status = "idle";
     };
 
-    // ── Mouse (desktop/testing) ───────────────────────────────────────────
-    // Mobile browsers fire synthetic "ghost" mouse events (mousedown/move/up)
-    // shortly after a real touch gesture, for compatibility with old sites
-    // that only listen for mouse events. Without guarding against these, a
-    // real touch swipe gets processed correctly, then a synthetic mouse
-    // sequence fires moments later with near-zero elapsed time (and thus an
-    // artificially huge computed velocity), occasionally flipping the tab
-    // back before a real re-render corrects it — exactly the "swipes,
-    // teleports back, swipes again" glitch. Ignoring mouse events shortly
-    // after any touch activity fixes this.
     let mouseActive = false;
     const GHOST_EVENT_GUARD_MS = 800;
     const onMouseDown = (e: MouseEvent) => {
@@ -253,12 +231,6 @@ export default function Home() {
           </div>
         </>
       ) : (
-        // Codex and Forge live together as one sliding strip: each "pane" is a full
-        // row (its own sidebar + its own content), so swiping moves the whole thing
-        // as a single smooth unit rather than the sidebar and content moving separately.
-        // min-w-0 here is critical: without it, a flex child won't shrink below its
-        // content's natural size, so overflow-hidden has nothing to actually clip —
-        // this was the real cause of both panes staying visible at once.
         <div className="flex-1 relative overflow-hidden flex min-w-0">
           <motion.div
             ref={swipeTrackRef}
