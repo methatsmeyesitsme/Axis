@@ -72,6 +72,7 @@ export default function Home() {
     };
 
     const beginDrag = (clientX: number, clientY: number) => {
+      if (!sidebarCollapsed) return;
       state.status = "pending";
       state.startX = clientX;
       state.startY = clientY;
@@ -188,138 +189,146 @@ export default function Home() {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [getWidth, x, snapTo]);
+  }, [getWidth, x, snapTo, sidebarCollapsed]);
+
+  const openSidebar = !sidebarCollapsed;
 
   return (
-    <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-background">
+      {/* Main content always full width — never squished */}
       {activeTab === "cortex" ? (
-        <>
-          <motion.div
-            initial={false}
-            animate={{ width: sidebarCollapsed ? 0 : 288 }}
-            transition={{ type: "spring", stiffness: 380, damping: 38 }}
-            className="h-full shrink-0 overflow-hidden"
-          >
-            <Sidebar
-              activeConversationId={activeConversationId}
-              onSelectConversation={setActiveConversationId}
-              activeCortexConversationId={activeCortexConversationId}
-              onSelectCortexConversation={setActiveCortexConversationId}
-              onOpenSettings={() => setShowSettings(true)}
-              activeTab="cortex"
-              onTabChange={setActiveTab}
-            />
-          </motion.div>
-          <div className="flex-1 flex flex-col min-w-0 relative">
-            {!isLoading && !user && (
-              <div className="absolute top-3 right-4 z-10">
-                <Button
-                  size="sm"
-                  className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
-                  onClick={() => setShowAuth(true)}
-                >
-                  <LogIn className="w-4 h-4" />
-                  Log in
-                </Button>
-              </div>
-            )}
-            <CortexArea
-              conversationId={activeCortexConversationId}
-              onConversationCreated={(id) => setActiveCortexConversationId(id)}
-              onOpenAuth={() => setShowAuth(true)}
-            />
-          </div>
-        </>
+        <div className="h-full w-full flex flex-col min-w-0 relative">
+          {!isLoading && !user && (
+            <div className="absolute top-3 right-4 z-10">
+              <Button
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
+                onClick={() => setShowAuth(true)}
+              >
+                <LogIn className="w-4 h-4" />
+                Log in
+              </Button>
+            </div>
+          )}
+          <CortexArea
+            conversationId={activeCortexConversationId}
+            onConversationCreated={(id) => setActiveCortexConversationId(id)}
+            onOpenAuth={() => setShowAuth(true)}
+          />
+        </div>
       ) : (
-        <div className="flex-1 relative overflow-hidden flex min-w-0">
+        <div className="h-full w-full relative overflow-hidden min-w-0">
           <motion.div
             ref={swipeTrackRef}
             className="flex h-full shrink-0"
             style={{ width: "200%", touchAction: "pan-y", x }}
           >
-            <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
-              <motion.div
-                initial={false}
-                animate={{ width: sidebarCollapsed ? 0 : 288 }}
-                transition={{ type: "spring", stiffness: 380, damping: 38 }}
-                className="h-full shrink-0 overflow-hidden"
-              >
-                <Sidebar
-                  activeConversationId={activeConversationId}
-                  onSelectConversation={setActiveConversationId}
-                  activeCortexConversationId={activeCortexConversationId}
-                  onSelectCortexConversation={setActiveCortexConversationId}
-                  onOpenSettings={() => setShowSettings(true)}
-                  activeTab="codex"
-                  onTabChange={setActiveTab}
-                />
-              </motion.div>
-              <div className="flex-1 flex flex-col min-w-0 relative">
-                {!isLoading && !user && (
-                  <div className="absolute top-3 right-4 z-10">
-                    <Button
-                      size="sm"
-                      className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
-                      onClick={() => setShowAuth(true)}
-                    >
-                      <LogIn className="w-4 h-4" />
-                      Log in
-                    </Button>
-                  </div>
-                )}
-                <ChatArea
-                  conversationId={activeConversationId}
-                  onConversationCreated={(id) => setActiveConversationId(id)}
-                  onOpenAuth={() => setShowAuth(true)}
-                  forgeHint
-                  onOpenForge={() => snapTo("forge")}
-                />
-              </div>
+            <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
+              {!isLoading && !user && (
+                <div className="absolute top-3 right-4 z-10">
+                  <Button
+                    size="sm"
+                    className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
+                    onClick={() => setShowAuth(true)}
+                  >
+                    <LogIn className="w-4 h-4" />
+                    Log in
+                  </Button>
+                </div>
+              )}
+              <ChatArea
+                conversationId={activeConversationId}
+                onConversationCreated={(id) => setActiveConversationId(id)}
+                onOpenAuth={() => setShowAuth(true)}
+                forgeHint
+                onOpenForge={() => snapTo("forge")}
+              />
             </div>
 
-            <div style={{ width: "50%" }} className="h-full shrink-0 flex min-w-0">
-              <motion.div
-                initial={false}
-                animate={{ width: sidebarCollapsed ? 0 : 288 }}
-                transition={{ type: "spring", stiffness: 380, damping: 38 }}
-                className="h-full shrink-0 overflow-hidden"
-              >
-                <ForgeSidebar
-                  activeForgeConversationId={activeForgeConversationId}
-                  onSelectForgeConversation={setActiveForgeConversationId}
-                  onOpenSettings={() => setShowSettings(true)}
-                />
-              </motion.div>
-              <div className="flex-1 flex flex-col min-w-0 relative">
-                {!isLoading && !user && (
-                  <div className="absolute top-3 right-4 z-10">
-                    <Button
-                      size="sm"
-                      className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
-                      onClick={() => setShowAuth(true)}
-                    >
-                      <LogIn className="w-4 h-4" />
-                      Log in
-                    </Button>
-                  </div>
-                )}
-                <ForgeArea
-                  conversationId={activeForgeConversationId}
-                  onConversationCreated={(id) => setActiveForgeConversationId(id)}
-                  onOpenAuth={() => setShowAuth(true)}
-                />
-              </div>
+            <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
+              {!isLoading && !user && (
+                <div className="absolute top-3 right-4 z-10">
+                  <Button
+                    size="sm"
+                    className="bg-primary hover:bg-primary/90 text-white shadow-sm gap-2"
+                    onClick={() => setShowAuth(true)}
+                  >
+                    <LogIn className="w-4 h-4" />
+                    Log in
+                  </Button>
+                </div>
+              )}
+              <ForgeArea
+                conversationId={activeForgeConversationId}
+                onConversationCreated={(id) => setActiveForgeConversationId(id)}
+                onOpenAuth={() => setShowAuth(true)}
+              />
             </div>
           </motion.div>
         </div>
       )}
 
+      {/* Dim backdrop when sidebar is open */}
+      <motion.button
+        type="button"
+        aria-label="Close sidebar"
+        onClick={() => setSidebarCollapsed(true)}
+        className="fixed inset-0 z-40 bg-black/40"
+        initial={false}
+        animate={{
+          opacity: openSidebar ? 1 : 0,
+          pointerEvents: openSidebar ? "auto" : "none",
+        }}
+        transition={{ duration: 0.22 }}
+      />
+
+      {/* Overlay drawer — slides over content, does not resize chat */}
+      <motion.aside
+        initial={false}
+        animate={{ x: openSidebar ? 0 : -288 }}
+        transition={{ type: "spring", stiffness: 420, damping: 36 }}
+        className="fixed top-0 left-0 z-50 h-full w-72 shadow-2xl border-r bg-sidebar"
+      >
+        {activeTab === "forge" ? (
+          <ForgeSidebar
+            activeForgeConversationId={activeForgeConversationId}
+            onSelectForgeConversation={(id) => {
+              setActiveForgeConversationId(id);
+              setSidebarCollapsed(true);
+            }}
+            onOpenSettings={() => {
+              setShowSettings(true);
+              setSidebarCollapsed(true);
+            }}
+          />
+        ) : (
+          <Sidebar
+            activeConversationId={activeConversationId}
+            onSelectConversation={(id) => {
+              setActiveConversationId(id);
+              setSidebarCollapsed(true);
+            }}
+            activeCortexConversationId={activeCortexConversationId}
+            onSelectCortexConversation={(id) => {
+              setActiveCortexConversationId(id);
+              setSidebarCollapsed(true);
+            }}
+            onOpenSettings={() => {
+              setShowSettings(true);
+              setSidebarCollapsed(true);
+            }}
+            activeTab={activeTab === "cortex" ? "cortex" : "codex"}
+            onTabChange={(tab) => {
+              setActiveTab(tab);
+            }}
+          />
+        )}
+      </motion.aside>
+
       <button
         onClick={() => setSidebarCollapsed((v) => !v)}
         title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-        className={`fixed top-3 z-40 flex items-center justify-center w-8 h-8 rounded-lg bg-card border shadow-sm hover:bg-muted transition-[left] duration-300 ease-in-out ${
-          sidebarCollapsed ? "left-2" : "left-[264px]"
-        }`}
+        className="fixed top-3 left-2 z-[60] flex items-center justify-center w-8 h-8 rounded-lg bg-card border shadow-sm hover:bg-muted"
       >
         <Menu className="w-4 h-4" />
       </button>
