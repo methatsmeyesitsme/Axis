@@ -3,6 +3,7 @@ import { pipeline, type TextGenerationPipeline } from "@huggingface/transformers
 let generator: TextGenerationPipeline | null = null;
 let loading: Promise<TextGenerationPipeline> | null = null;
 let loadedModelId: string | null = null;
+let loadFailed = false;
 
 const MODELS = {
   "0.5b": "onnx-community/Qwen2.5-Coder-0.5B-Instruct",
@@ -55,35 +56,70 @@ function stripAssistantPrefix(generated: string): string {
   return last || generated.trim();
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s. Try a shorter message.`));
+    }, ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function getGenerator(): Promise<TextGenerationPipeline> {
   const modelId = getModelId();
 
   if (generator && loadedModelId === modelId) return generator;
+  if (loadFailed && loadedModelId === modelId) {
+    throw new Error("Local model failed to load earlier. Restart the Repl and try again.");
+  }
 
   if (!loading || loadedModelId !== modelId) {
     loading = (async () => {
       console.log(`[local-ai] Loading ${modelId} (first run can take a while)...`);
       const t0 = Date.now();
-      const pipe = await pipeline("text-generation", modelId, {
-        dtype: "q4",
-        device: "cpu",
-      });
-      console.log(`[local-ai] Model loaded in ${Date.now() - t0}ms`);
-      generator = pipe as TextGenerationPipeline;
-      loadedModelId = modelId;
-      return generator;
+      try {
+        const pipe = await withTimeout(
+          pipeline("text-generation", modelId, {
+            dtype: "q4",
+            device: "cpu",
+          }) as Promise<TextGenerationPipeline>,
+          180_000,
+          "Model load",
+        );
+        console.log(`[local-ai] Model loaded in ${Date.now() - t0}ms`);
+        generator = pipe;
+        loadedModelId = modelId;
+        loadFailed = false;
+        return generator;
+      } catch (err) {
+        loadFailed = true;
+        loadedModelId = modelId;
+        loading = null;
+        generator = null;
+        console.error("[local-ai] load failed", err);
+        throw err;
+      }
     })();
   }
 
   return loading;
 }
 
-/** Warm the model at server start so the first chat is faster. */
+/** Optional warm-up — safe to call; never crashes the process. */
 export async function preloadLocalModel(): Promise<void> {
   try {
     await getGenerator();
   } catch (err) {
-    console.error("[local-ai] preload failed", err);
+    console.error("[local-ai] preload failed (non-fatal)", err);
   }
 }
 
@@ -127,11 +163,12 @@ function resolveBudgets(
   return {
     fast,
     greeting,
-    maxMessages: options.maxMessages ?? (greeting ? 2 : fast ? 3 : size === "1.5b" ? 8 : 4),
-    maxChars: options.maxCharsPerMessage ?? (greeting ? 300 : fast ? 600 : size === "1.5b" ? 1600 : 1000),
+    maxMessages: options.maxMessages ?? (greeting ? 2 : fast ? 3 : size === "1.5b" ? 6 : 4),
+    maxChars: options.maxCharsPerMessage ?? (greeting ? 300 : fast ? 500 : size === "1.5b" ? 1200 : 800),
+    // Keep generation budgets modest on Replit CPU to avoid 502 timeouts
     maxNewTokens:
       options.maxNewTokens ??
-      (greeting ? 48 : fast ? 96 : size === "1.5b" ? 768 : 384),
+      (greeting ? 40 : fast ? 80 : size === "1.5b" ? 512 : 256),
   };
 }
 
@@ -144,31 +181,43 @@ export async function localGenerate(
     fast?: boolean;
   } = {},
 ): Promise<string> {
-  const pipe = await getGenerator();
-  const { maxMessages, maxChars, maxNewTokens } = resolveBudgets(messages, options);
+  try {
+    const pipe = await getGenerator();
+    const { maxMessages, maxChars, maxNewTokens } = resolveBudgets(messages, options);
 
-  const trimmed = messages.slice(-maxMessages).map((m) => ({
-    role: m.role,
-    content: String(m.content).slice(0, maxChars),
-  }));
+    const trimmed = messages.slice(-maxMessages).map((m) => ({
+      role: m.role,
+      content: String(m.content).slice(0, maxChars),
+    }));
 
-  const result = await pipe(trimmed, {
-    max_new_tokens: maxNewTokens,
-    do_sample: false,
-    temperature: 0.15,
-  });
+    const result = await withTimeout(
+      Promise.resolve(
+        pipe(trimmed, {
+          max_new_tokens: maxNewTokens,
+          do_sample: false,
+          temperature: 0.15,
+        }),
+      ) as Promise<unknown>,
+      90_000,
+      "Local generation",
+    );
 
-  const raw = Array.isArray(result) ? result[0] : result;
-  const generated = extractGeneratedText(
-    (raw as { generated_text?: unknown })?.generated_text ?? raw,
-  );
-  return stripAssistantPrefix(generated);
+    const raw = Array.isArray(result) ? result[0] : result;
+    const generated = extractGeneratedText(
+      (raw as { generated_text?: unknown })?.generated_text ?? raw,
+    );
+    return stripAssistantPrefix(generated);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[local-ai] generate failed", msg);
+    throw new Error(
+      msg.includes("timed out")
+        ? msg
+        : "Local model ran out of memory or crashed. Restart the Repl, keep messages short, and use LOCAL_MODEL_SIZE=0.5b.",
+    );
+  }
 }
 
-/**
- * Generate and call onToken for each new piece of text so the UI can type live.
- * Falls back to chunked playback if the runtime does not stream mid-generation.
- */
 export async function localGenerateStreaming(
   messages: Array<{ role: string; content: string }>,
   options: {
@@ -179,65 +228,15 @@ export async function localGenerateStreaming(
     onToken?: (chunk: string) => void;
   } = {},
 ): Promise<string> {
-  const pipe = await getGenerator();
-  const { maxMessages, maxChars, maxNewTokens, greeting, fast } = resolveBudgets(messages, options);
+  const { greeting, fast } = resolveBudgets(messages, options);
+  const assembled = await localGenerate(messages, options);
 
-  const trimmed = messages.slice(-maxMessages).map((m) => ({
-    role: m.role,
-    content: String(m.content).slice(0, maxChars),
-  }));
-
-  let assembled = "";
-  let lastEmitted = "";
-
-  const emitDelta = (full: string) => {
-    const cleaned = stripAssistantPrefix(full);
-    if (cleaned.length <= lastEmitted.length) return;
-    const delta = cleaned.slice(lastEmitted.length);
-    lastEmitted = cleaned;
-    assembled = cleaned;
-    if (delta) options.onToken?.(delta);
-  };
-
-  try {
-    // Prefer real token streaming when the pipeline supports callback_function
-    const result = await pipe(trimmed, {
-      max_new_tokens: maxNewTokens,
-      do_sample: false,
-      temperature: 0.15,
-      // @ts-expect-error transformers.js supports this callback on many builds
-      callback_function: (beams: Array<{ output_token_ids?: number[] }>) => {
-        try {
-          // Best-effort: decode is internal; we re-run extract after full gen.
-          // Keep callback light — real delta emission happens after if needed.
-          void beams;
-        } catch {
-          // ignore
-        }
-      },
-    });
-
-    const raw = Array.isArray(result) ? result[0] : result;
-    const generated = extractGeneratedText(
-      (raw as { generated_text?: unknown })?.generated_text ?? raw,
-    );
-    assembled = stripAssistantPrefix(generated);
-  } catch {
-    assembled = await localGenerate(messages, options);
-  }
-
-  // Type out quickly for the UI (feels live even when the model is non-streaming)
   if (options.onToken && assembled) {
-    if (lastEmitted.length === 0) {
-      const step = greeting || fast ? 6 : 10; // characters per tick
-      const delay = greeting || fast ? 8 : 12; // ms between ticks
-      for (let i = 0; i < assembled.length; i += step) {
-        const chunk = assembled.slice(i, i + step);
-        options.onToken(chunk);
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    } else if (assembled.length > lastEmitted.length) {
-      options.onToken(assembled.slice(lastEmitted.length));
+    const step = greeting || fast ? 6 : 10;
+    const delay = greeting || fast ? 8 : 12;
+    for (let i = 0; i < assembled.length; i += step) {
+      options.onToken(assembled.slice(i, i + step));
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
 
