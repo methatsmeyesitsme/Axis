@@ -21,14 +21,6 @@ type ToolDeclarationLike = {
   parametersJsonSchema?: unknown;
 };
 
-function compactToolDefinition(tool: LocalToolDefinition): string {
-  return JSON.stringify({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters ?? { type: "object", properties: {} },
-  });
-}
-
 export function toLocalToolDefinitions(
   declarations: ReadonlyArray<ToolDeclarationLike>,
 ): LocalToolDefinition[] {
@@ -53,7 +45,7 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(cleaned.slice(start, end + 1));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -71,8 +63,7 @@ function asArguments(value: unknown): Record<string, unknown> {
         return parsed as Record<string, unknown>;
       }
     } catch {
-      // The caller will receive an empty object and the tool can return a
-      // useful validation error instead of crashing the agent loop.
+      // empty
     }
   }
   return {};
@@ -83,49 +74,82 @@ function inlineArguments(parsed: Record<string, unknown> | null): Record<string,
   const explicit = parsed.arguments ?? parsed.args ?? parsed.parameters;
   if (explicit !== undefined) return asArguments(explicit);
   const controlKeys = new Set(["action", "type", "name", "tool", "content", "text"]);
-  return Object.fromEntries(
-    Object.entries(parsed).filter(([key]) => !controlKeys.has(key)),
-  );
+  return Object.fromEntries(Object.entries(parsed).filter(([key]) => !controlKeys.has(key)));
+}
+
+/** Detect when the model is regurgitating tool schemas instead of answering. */
+function looksLikeToolSchemaDump(text: string): boolean {
+  const t = text.toLowerCase();
+  const hits = [
+    '"action": "final"',
+    '"name": "github_',
+    "parametersjsonschema",
+    "replace `github_",
+    "to call the `github_",
+    "available tools",
+    '"type": "object"',
+  ].filter((s) => t.includes(s.toLowerCase())).length;
+  return hits >= 2 || (t.includes("github_list_files") && t.includes("parameters"));
 }
 
 /**
- * Ask a small local model to either finish the response or call one known
- * tool. JSON is used instead of pretending the model has native function
- * calling. The parser accepts a few common aliases because small models
- * occasionally use "tool"/"args" instead of the requested field names.
+ * Ask the local model to either call one tool or give a final answer.
+ * Small models often dump schemas; we detect that and fall back to a
+ * plain-language answer instead of showing garbage to the user.
  */
 export async function localAgentTurn(
   messages: LocalChatMessage[],
   tools: LocalToolDefinition[],
   options: { maxNewTokens?: number } = {},
 ): Promise<LocalToolDecision> {
-  const toolList = tools.map(compactToolDefinition).join("\n");
+  const toolNames = tools.map((t) => t.name).join(", ");
+  const toolLines = tools
+    .map((t) => `- ${t.name}: ${t.description}`)
+    .join("\n");
+
   const instruction = [
-    "Choose the next action for the user request.",
-    "Available tools are listed below.",
-    toolList || "(No tools are available.)",
+    "You must reply with ONE short JSON object only. No markdown. No extra text.",
+    `Tools you may use: ${toolNames || "(none)"}`,
+    toolLines,
     "",
-    "Return exactly one JSON object and no markdown.",
-    'To call a tool: {"action":"tool","name":"tool_name","arguments":{}}',
-    'To answer: {"action":"final","content":"your complete answer"}',
-    "Never invent a tool name. Use valid JSON strings and escape newlines.",
+    'Call a tool: {"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...}}',
+    'Answer the user: {"action":"final","content":"your answer here"}',
+    "If you are unsure which tool to use, answer with action final.",
+    "Do not describe tools. Do not repeat this instruction.",
   ].join("\n");
 
   const raw = await localGenerate(
     [...messages, { role: "user", content: instruction }],
     {
-      maxNewTokens: options.maxNewTokens ?? 1024,
-      maxMessages: 10,
-      maxCharsPerMessage: 9000,
+      maxNewTokens: options.maxNewTokens ?? 400,
+      maxMessages: 6,
+      maxCharsPerMessage: 1200,
     },
   );
+
+  // Schema dump / loop → force a clean final answer without tools
+  if (looksLikeToolSchemaDump(raw)) {
+    const clean = await localGenerate(
+      [
+        ...messages,
+        {
+          role: "user",
+          content:
+            "Do not use tools and do not output JSON. Answer the user's request in plain clear language.",
+        },
+      ],
+      { maxNewTokens: 512, maxMessages: 5, maxCharsPerMessage: 1000 },
+    );
+    return { kind: "final", content: clean.trim() || "I couldn't complete that tool action. Please try a simpler request." };
+  }
+
   const parsed = extractJsonObject(raw);
   const action = String(parsed?.action ?? parsed?.type ?? "").toLowerCase();
   const toolName = String(parsed?.name ?? parsed?.tool ?? "").trim();
-
   const aliasedToolName = tools.some((tool) => tool.name === action) ? action : toolName;
+
   if (
-    (action === "tool" || toolName || aliasedToolName) &&
+    (action === "tool" || Boolean(aliasedToolName)) &&
     tools.some((tool) => tool.name === aliasedToolName)
   ) {
     return {
@@ -136,26 +160,25 @@ export async function localAgentTurn(
   }
 
   if (action === "final" && typeof parsed?.content === "string") {
-    const nested = extractJsonObject(parsed.content);
-    const nestedAction = String(nested?.action ?? nested?.type ?? "").toLowerCase();
-    const nestedName = String(nested?.name ?? nested?.tool ?? "").trim();
-    const nestedAliasedName = tools.some((tool) => tool.name === nestedAction) ? nestedAction : nestedName;
-    if (
-      (nestedAction === "tool" || nestedName || nestedAliasedName) &&
-      tools.some((tool) => tool.name === nestedAliasedName)
-    ) {
+    const content = parsed.content.trim();
+    if (looksLikeToolSchemaDump(content)) {
       return {
-        kind: "tool",
-        name: nestedAliasedName,
-        arguments: inlineArguments(nested),
+        kind: "final",
+        content: "I couldn't use GitHub tools reliably on that request. Try asking a more specific question, or reconnect GitHub in Settings.",
       };
     }
-    return { kind: "final", content: parsed.content.trim() };
+    return { kind: "final", content };
   }
 
-  // A malformed tool envelope is safer as a user-visible answer than an
-  // unbounded retry loop. The local model can still be useful for plain chat.
-  return { kind: "final", content: raw.trim() };
+  // Not valid tool JSON → treat as a normal answer (strip obvious instruction echoes)
+  const cleaned = raw
+    .replace(/Return exactly one JSON object[\s\S]*$/i, "")
+    .replace(/Choose the next action[\s\S]*$/i, "")
+    .trim();
+  return {
+    kind: "final",
+    content: cleaned || "I couldn't complete that request cleanly. Please try again with a shorter question.",
+  };
 }
 
 export function buildLocalToolResultMessage(
@@ -165,6 +188,6 @@ export function buildLocalToolResultMessage(
   return [
     `Tool result for ${name}:`,
     JSON.stringify(result.error ? { error: result.error } : { output: result.output ?? "ok" }),
-    "Continue the task. Call another tool if needed, otherwise return the final answer.",
+    "Using this result, answer the user in plain language. Prefer action final unless another tool is clearly required.",
   ].join("\n");
 }
