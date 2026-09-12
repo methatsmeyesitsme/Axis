@@ -1,6 +1,5 @@
 /**
- * Build a short, satisfying status line for tool activity.
- * Hard limit: 5 words.
+ * Build a short status line for tool activity (max 5 words).
  */
 export function toolStatusSummary(
   name: string,
@@ -10,7 +9,7 @@ export function toolStatusSummary(
   const path = String(args.path ?? args.file ?? args.filename ?? "").replace(/^\/+/, "");
   const shortPath = path ? path.split("/").pop() || path : "";
 
-  let words: string[];
+  let words: string[] = ["Working"];
 
   switch (name) {
     case "github_list_files":
@@ -21,7 +20,7 @@ export function toolStatusSummary(
       break;
     case "github_write_file":
       if (shortPath) {
-        words = [phase === "done" ? "Saved" : "Editing", shortPath];
+        words = phase === "done" ? ["Saved", shortPath] : ["Editing", shortPath];
       } else {
         words = phase === "done" ? ["Saved", "file"] : ["Writing", "file"];
       }
