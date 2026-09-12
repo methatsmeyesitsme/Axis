@@ -21,7 +21,7 @@ import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
-import { toolStatusSummary } from "../../lib/tool-status";
+import { toolStatusSummary } from "../../lib/status-line";
 
 void preloadLocalModel();
 
