@@ -2,10 +2,7 @@ import { db, forgeAppFiles, forgeAppData, forgeAppTables, forgeAppTableRows } fr
 import { eq, and, sql } from "drizzle-orm";
 import type { FunctionDeclaration } from "@google/genai";
 import { saveBackendHandler } from "./forge-handler-storage";
-
-// Every tool requires a `summary` argument: a concise, past-tense description of
-// what this call does, 8 words max. The model provides it; we enforce the cap
-// server-side as a safety net (see truncateSummary below).
+import { executeGithubTool, isGithubReady } from "../github-tools";
 
 const summaryProp = {
   summary: { type: "string", description: "Concise past-tense summary of this action, 8 words maximum" },
@@ -32,6 +29,22 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
       type: "object",
       properties: { path: { type: "string" }, ...summaryProp },
       required: ["path", "summary"],
+    },
+  },
+  {
+    name: "import_github_repo",
+    description:
+      "Pull files from the user's connected GitHub repository into this Forge app so they can be previewed with the Run button. Copies text/web files (html, css, js, json, md, svg, txt). Prefer paths that include index.html when possible.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Optional subdirectory in the repo to import (e.g. 'docs' or 'public'). Leave empty for the whole repo root.",
+        },
+        ...summaryProp,
+      },
+      required: ["summary"],
     },
   },
   {
@@ -230,15 +243,91 @@ function safeParseJson(value: unknown): unknown {
   }
 }
 
-/**
- * Executes a Forge tool call. This is deliberately DB-only — no generated code
- * ever runs here. Real sandboxed execution of app *logic* is a separate, later
- * phase; this is just safe, server-controlled CRUD against tables scoped to appId.
- */
+const PREVIEW_EXTS = new Set([
+  "html", "htm", "css", "js", "mjs", "cjs", "json", "md", "txt", "svg", "xml", "map",
+]);
+
+function isPreviewFile(path: string): boolean {
+  const base = path.split("/").pop() ?? path;
+  if (base.startsWith(".")) return false;
+  const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
+  return PREVIEW_EXTS.has(ext);
+}
+
+async function importGithubIntoForge(
+  appId: number,
+  userId: number | null,
+  rootPath: string,
+): Promise<ForgeToolResult> {
+  if (!userId) return { error: "Log in and connect GitHub in Settings first." };
+  if (!(await isGithubReady(userId))) {
+    return { error: "No GitHub repository is connected/selected. Connect GitHub and pick a repo in Settings." };
+  }
+
+  const queue: string[] = [rootPath.replace(/^\/+/, "")];
+  const filePaths: string[] = [];
+  const seen = new Set<string>();
+
+  while (queue.length > 0 && filePaths.length < 80) {
+    const dir = queue.shift()!;
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    const listed = await executeGithubTool(userId, "github_list_files", { path: dir });
+    if (listed.error) return { error: listed.error };
+    const items = Array.isArray(listed.output) ? listed.output : [];
+    for (const item of items as Array<{ path?: string; type?: string; name?: string }>) {
+      const p = String(item.path ?? "");
+      if (!p) continue;
+      if (item.type === "dir") {
+        if (!p.includes("node_modules") && !p.includes(".git")) queue.push(p);
+      } else if (item.type === "file" && isPreviewFile(p)) {
+        filePaths.push(p);
+      }
+    }
+  }
+
+  if (filePaths.length === 0) {
+    return { error: "No previewable files found in that GitHub path (need html/css/js/json/md/svg/txt)." };
+  }
+
+  let imported = 0;
+  const names: string[] = [];
+  for (const path of filePaths.slice(0, 40)) {
+    const read = await executeGithubTool(userId, "github_read_file", { path });
+    if (read.error || typeof read.output !== "string") continue;
+    const content = read.output as string;
+    if (content.length > 400_000) continue;
+    const [existing] = await db
+      .select()
+      .from(forgeAppFiles)
+      .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
+    if (existing) {
+      await db.update(forgeAppFiles).set({ content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
+    } else {
+      await db.insert(forgeAppFiles).values({ appId, path, content });
+    }
+    imported++;
+    names.push(path);
+  }
+
+  const hasIndex = names.some((p) => p === "index.html" || p.endsWith("/index.html"));
+  return {
+    output: {
+      imported,
+      files: names.slice(0, 20),
+      hasIndexHtml: hasIndex,
+      hint: hasIndex
+        ? "Preview is ready — user can press Run."
+        : "Imported files, but no index.html. Create or copy one with write_file so Run works.",
+    },
+  };
+}
+
 async function executeForgeToolOnce(
   appId: number,
   name: string,
-  rawArgs: Record<string, unknown>
+  rawArgs: Record<string, unknown>,
+  userId?: number | null,
 ): Promise<ForgeToolResult> {
   try {
     switch (name) {
@@ -258,6 +347,9 @@ async function executeForgeToolOnce(
         const path = String(rawArgs.path ?? "");
         await db.delete(forgeAppFiles).where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
         return { output: `Deleted ${path}` };
+      }
+      case "import_github_repo": {
+        return importGithubIntoForge(appId, userId ?? null, String(rawArgs.path ?? ""));
       }
       case "db_get": {
         const key = String(rawArgs.key ?? "");
@@ -296,8 +388,6 @@ async function executeForgeToolOnce(
           await db.insert(forgeAppTables).values({ appId, name: tableName, columns });
         } catch (err) {
           const message = errorText(err);
-          // A repeated/concurrent create can race the existence check. Re-read
-          // before surfacing an error so completed setup remains resumable.
           if (isAlreadyCompletedError(message)) {
             const [racedExisting] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
             if (racedExisting) return { output: `Table ${tableName} already exists — continue using the existing table` };
@@ -383,20 +473,15 @@ async function executeForgeToolOnce(
   }
 }
 
-/**
- * Tool operations are retryable. PostgreSQL may briefly reject a valid
- * operation while a connection is recycled or a concurrent setup finishes.
- * Forge tools are app-scoped and setup operations are idempotent, so retrying
- * is safe and lets the model resume instead of stopping the whole build.
- */
 export async function executeForgeTool(
   appId: number,
   name: string,
   rawArgs: Record<string, unknown>,
+  userId?: number | null,
 ): Promise<ForgeToolResult> {
   let lastResult: ForgeToolResult = { error: `Tool ${name} failed` };
   for (let attempt = 0; attempt < 3; attempt++) {
-    lastResult = await executeForgeToolOnce(appId, name, rawArgs);
+    lastResult = await executeForgeToolOnce(appId, name, rawArgs, userId);
     if (!lastResult.error) return lastResult;
 
     if (isAlreadyCompletedError(lastResult.error)) {
