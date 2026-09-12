@@ -316,47 +316,49 @@ export default function Home() {
         transition={{ type: "spring", stiffness: 420, damping: 36 }}
         className="fixed top-2 bottom-2 left-0 z-50 flex items-stretch pointer-events-none"
       >
-        <aside
-          className="relative pointer-events-auto h-full w-72 rounded-r-2xl border border-l-0 bg-sidebar overflow-hidden"
+        {/* drop-shadow follows the rounded shape (rounded top/bottom, not square) */}
+        <div
+          className="pointer-events-auto h-full"
           style={{
-            // Thicker soft shadow that follows the rounded right corners
-            boxShadow:
-              "6px 0 18px rgba(0,0,0,0.12), 12px 0 32px rgba(0,0,0,0.08), 2px 0 6px rgba(0,0,0,0.06)",
+            filter:
+              "drop-shadow(4px 0 6px rgba(0,0,0,0.22)) drop-shadow(8px 0 12px rgba(0,0,0,0.14))",
           }}
         >
-          {activeTab === "forge" ? (
-            <ForgeSidebar
-              activeForgeConversationId={activeForgeConversationId}
-              onSelectForgeConversation={(id) => {
-                setActiveForgeConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              onOpenSettings={() => {
-                setShowSettings(true);
-                setSidebarCollapsed(true);
-              }}
-            />
-          ) : (
-            <Sidebar
-              activeConversationId={activeConversationId}
-              onSelectConversation={(id) => {
-                setActiveConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              activeCortexConversationId={activeCortexConversationId}
-              onSelectCortexConversation={(id) => {
-                setActiveCortexConversationId(id);
-                setSidebarCollapsed(true);
-              }}
-              onOpenSettings={() => {
-                setShowSettings(true);
-                setSidebarCollapsed(true);
-              }}
-              activeTab={activeTab === "cortex" ? "cortex" : "codex"}
-              onTabChange={(tab) => setActiveTab(tab)}
-            />
-          )}
-        </aside>
+          <aside className="h-full w-72 rounded-r-2xl border border-l-0 bg-sidebar overflow-hidden">
+            {activeTab === "forge" ? (
+              <ForgeSidebar
+                activeForgeConversationId={activeForgeConversationId}
+                onSelectForgeConversation={(id) => {
+                  setActiveForgeConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                onOpenSettings={() => {
+                  setShowSettings(true);
+                  setSidebarCollapsed(true);
+                }}
+              />
+            ) : (
+              <Sidebar
+                activeConversationId={activeConversationId}
+                onSelectConversation={(id) => {
+                  setActiveConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                activeCortexConversationId={activeCortexConversationId}
+                onSelectCortexConversation={(id) => {
+                  setActiveCortexConversationId(id);
+                  setSidebarCollapsed(true);
+                }}
+                onOpenSettings={() => {
+                  setShowSettings(true);
+                  setSidebarCollapsed(true);
+                }}
+                activeTab={activeTab === "cortex" ? "cortex" : "codex"}
+                onTabChange={(tab) => setActiveTab(tab)}
+              />
+            )}
+          </aside>
+        </div>
 
         {openSidebar && (
           <div className="pointer-events-auto flex items-start pt-1 pl-2">
