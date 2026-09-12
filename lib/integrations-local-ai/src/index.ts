@@ -1,7 +1,10 @@
 export {
   localGenerate,
+  localGenerateStreaming,
+  preloadLocalModel,
   buildLocalSystemPrompt,
   isShortRequest,
+  isGreeting,
   LOCAL_MODEL_ID,
   getModelSize,
 } from "./client";
