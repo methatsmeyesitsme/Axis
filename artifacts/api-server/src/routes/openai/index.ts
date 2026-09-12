@@ -21,9 +21,35 @@ import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
-import { toolStatusSummary } from "../../lib/status-line";
 
 void preloadLocalModel();
+
+function toolStatusSummary(
+  name: string,
+  args: Record<string, unknown> = {},
+  phase: "start" | "done" | "error" = "start",
+): string {
+  const path = String(args.path ?? args.file ?? args.filename ?? "").replace(/^\/+/, "");
+  const shortPath = path ? path.split("/").pop() || path : "";
+  let words: string[] = ["Working"];
+  if (name === "github_list_files") {
+    words = path ? ["Listing", shortPath, "files"] : ["Listing", "repo", "files"];
+  } else if (name === "github_read_file") {
+    words = shortPath ? ["Reading", shortPath] : ["Reading", "file"];
+  } else if (name === "github_write_file") {
+    if (shortPath) words = phase === "done" ? ["Saved", shortPath] : ["Editing", shortPath];
+    else words = phase === "done" ? ["Saved", "file"] : ["Writing", "file"];
+  } else if (name === "web_search") {
+    words = phase === "done" ? ["Finished", "web", "search"] : ["Searching", "the", "web"];
+  } else if (name === "image_gen") {
+    words = phase === "done" ? ["Image", "ready"] : ["Drawing", "your", "image"];
+  } else {
+    const label = name.replace(/^github_/, "").replace(/_/g, " ");
+    words = phase === "done" ? ["Done", label] : ["Using", label];
+  }
+  if (phase === "error") words = ["Failed", ...words.slice(0, 4)];
+  return words.filter(Boolean).slice(0, 5).join(" ");
+}
 
 const router: IRouter = Router();
 
@@ -80,10 +106,6 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
     if (!text || text === "NONE") return;
     const facts = text.split("\n").map((f) => f.trim()).filter((f) => f && f !== "NONE");
     for (const fact of facts) await db.insert(userMemories).values({ userId, content: fact });
-    const all = await db.select().from(userMemories).where(eq(userMemories.userId, userId)).orderBy(desc(userMemories.createdAt));
-    if (all.length > 30) {
-      for (const id of all.slice(30).map((r) => r.id)) await db.delete(userMemories).where(eq(userMemories.id, id));
-    }
   } catch { /* best-effort */ }
 }
 
@@ -247,7 +269,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
             res.write(`data: ${JSON.stringify({ toolError: { id: toolId, summary: "Image failed", error: message } })}\n\n`);
             res.write(`data: ${JSON.stringify({ imageFailed: true })}\n\n`);
           }
-          workingMessages.push({ role: "user", content: `Image generation failed: ${message}. Apologize briefly and offer to try a simpler prompt.` });
+          workingMessages.push({ role: "user", content: `Image generation failed: ${message}. Apologize briefly.` });
         }
       }
 
@@ -257,8 +279,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
       if (wantsWebSearch) {
         const toolId = `${Date.now()}-web-search`;
-        const webStart = toolStatusSummary("web_search", {}, "start");
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: webStart } })}\n\n`);
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: toolStatusSummary("web_search", {}, "start") } })}\n\n`);
         try {
           const search = await localWebSearch(content);
           for (const source of search.sources) sources.push({ url: source.url, title: source.title });
@@ -284,11 +305,10 @@ router.post("/conversations/:id/messages", async (req, res) => {
           const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 350 });
           if (decision.kind === "final") { reply = decision.content; break; }
           const toolId = `${Date.now()}-${turn}`;
-          const startSummary = toolStatusSummary(decision.name, decision.arguments, "start");
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: startSummary } })}\n\n`);
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: toolStatusSummary(decision.name, decision.arguments, "start") } })}\n\n`);
           let result: { output?: unknown; error?: string };
           if (userId && (await isGithubReady(userId))) result = await executeGithubTool(userId, decision.name, decision.arguments);
-          else result = { error: "No GitHub repository is connected/selected. Connect GitHub and pick a repo in Settings." };
+          else result = { error: "No GitHub repository is connected/selected." };
           if (!res.writableEnded) {
             const summary = toolStatusSummary(decision.name, decision.arguments, result.error ? "error" : "done");
             res.write(`data: ${JSON.stringify(result.error ? { toolError: { id: toolId, summary, error: result.error } } : { toolDone: { id: toolId, summary } })}\n\n`);
@@ -337,75 +357,14 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return;
   }
 
-  const { text: currentText, imageParts: currentImageParts } = extractImageParts(content);
-  const chatMessages: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [
-    ...history.map((m) => ({
-      role: (m.role === "assistant" ? "model" : "user") as "user" | "model",
-      parts: [{ text: m.content.replace(/\[IMAGE:[^\]]*\]/g, "[image was attached here]").replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]") }],
-    })),
-    { role: "user" as const, parts: [...currentImageParts, { text: currentText || "Please look at the attached image." }] },
-  ];
-
-  if (userId && (await isGithubReady(userId))) {
-    let toolRounds = 4;
-    while (toolRounds-- > 0) {
-      const toolCheck = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: chatMessages,
-        config: {
-          systemInstruction: `${systemPrompt}\n\nIf asking about the connected GitHub repo, use github_* tools. Otherwise answer normally.`,
-          tools: [{ functionDeclarations: githubToolDeclarations }],
-        },
-      });
-      const calls = toolCheck.functionCalls;
-      if (!calls?.length) break;
-      chatMessages.push({ role: "model", parts: calls.map((fc) => ({ functionCall: fc })) });
-      const responseParts: Array<Record<string, unknown>> = [];
-      for (const call of calls) {
-        const args = (call.args ?? {}) as Record<string, unknown>;
-        const result = await executeGithubTool(userId, call.name ?? "", args);
-        responseParts.push({ functionResponse: { name: call.name, response: result.error ? { error: result.error } : { output: result.output ?? "ok" } } });
-      }
-      chatMessages.push({ role: "user", parts: responseParts });
-    }
-  }
-
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
-
-  let fullResponse = "";
-  try {
-    const stream = await ai.models.generateContentStream({
-      model: "gemini-3.6-flash",
-      contents: chatMessages,
-      config: { maxOutputTokens: 8192, systemInstruction: systemPrompt, tools: [{ googleSearch: {} }] },
-    });
-    let lastGroundingChunks: Array<{ web?: { uri: string; title?: string } }> = [];
-    for await (const chunk of stream) {
-      if (res.writableEnded) break;
-      const text = chunk.text;
-      if (text) {
-        fullResponse += text;
-        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
-      }
-      const meta = (chunk as unknown as { candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ web?: { uri: string; title?: string } }> } }> }).candidates?.[0]?.groundingMetadata;
-      if (meta?.groundingChunks?.length) lastGroundingChunks = meta.groundingChunks;
-    }
-    if (!res.writableEnded) {
-      let savedContent = fullResponse;
-      const sources = lastGroundingChunks.filter((c) => c.web?.uri).map((c) => ({ url: c.web!.uri, title: c.web!.title ?? c.web!.uri }));
-      if (sources.length > 0) res.write(`data: ${JSON.stringify({ sources })}\n\n`);
-      if (userId && id > 0 && savedContent) await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-    }
-  } catch (err) {
-    const msg = friendlyGeminiErrorMessage(err);
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
-  } finally {
-    if (!res.writableEnded) res.end();
+  if (!res.writableEnded) {
+    res.write(`data: ${JSON.stringify({ error: "Cloud AI provider is not configured. Set AXIS_AI_PROVIDER=local." })}\n\n`);
+    res.end();
   }
 });
 
