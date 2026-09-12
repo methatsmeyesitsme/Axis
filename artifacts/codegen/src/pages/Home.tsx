@@ -195,7 +195,6 @@ export default function Home() {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-background">
-      {/* Main content always full width — never squished */}
       {activeTab === "cortex" ? (
         <div className="h-full w-full flex flex-col min-w-0 relative">
           {!isLoading && !user && (
@@ -268,7 +267,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Dim backdrop when sidebar is open */}
       <motion.button
         type="button"
         aria-label="Close sidebar"
@@ -282,12 +280,15 @@ export default function Home() {
         transition={{ duration: 0.22 }}
       />
 
-      {/* Overlay drawer — slides over content, does not resize chat */}
       <motion.aside
         initial={false}
         animate={{ x: openSidebar ? 0 : -288 }}
         transition={{ type: "spring", stiffness: 420, damping: 36 }}
-        className="fixed top-0 left-0 z-50 h-full w-72 shadow-2xl border-r bg-sidebar"
+        className="fixed top-0 left-0 z-50 h-full w-72 border-r bg-sidebar"
+        style={{
+          boxShadow:
+            "4px 0 24px rgba(0, 0, 0, 0.08), 8px 0 48px rgba(0, 0, 0, 0.06), 1px 0 0 rgba(0, 0, 0, 0.04)",
+        }}
       >
         {activeTab === "forge" ? (
           <ForgeSidebar
