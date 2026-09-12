@@ -5,12 +5,15 @@ let loading: Promise<TextGenerationPipeline> | null = null;
 let loadedModelId: string | null = null;
 
 /**
- * Free local models (ONNX / transformers.js)
- * Default is 1.5B for better quality. Use LOCAL_MODEL_SIZE=0.5b if memory is tight.
+ * Free local models (ONNX / transformers.js).
+ *
+ * Qwen Coder is a better fit for Axis than the general instruct checkpoint:
+ * it uses the same local runtime, but follows code and structured output
+ * instructions more reliably. Use LOCAL_MODEL_SIZE=0.5b if memory is tight.
  */
 const MODELS = {
-  "0.5b": "onnx-community/Qwen2.5-0.5B-Instruct",
-  "1.5b": "onnx-community/Qwen2.5-1.5B-Instruct",
+  "0.5b": "onnx-community/Qwen2.5-Coder-0.5B-Instruct",
+  "1.5b": "onnx-community/Qwen2.5-Coder-1.5B-Instruct",
 } as const;
 
 type LocalModelSize = keyof typeof MODELS;
@@ -23,6 +26,29 @@ function getModelSize(): LocalModelSize {
 
 function getModelId(): string {
   return MODELS[getModelSize()];
+}
+
+function extractGeneratedText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const last = value[value.length - 1];
+    if (last && typeof last === "object") {
+      const content = (last as { content?: unknown }).content;
+      if (typeof content === "string") return content;
+      const text = (last as { text?: unknown }).text;
+      if (typeof text === "string") return text;
+    }
+    return value.map(extractGeneratedText).filter(Boolean).join("\n");
+  }
+  if (value && typeof value === "object") {
+    const content = (value as { content?: unknown }).content;
+    if (typeof content === "string") return content;
+    const text = (value as { text?: unknown }).text;
+    if (typeof text === "string") return text;
+    const generatedText = (value as { generated_text?: unknown }).generated_text;
+    if (generatedText !== undefined) return extractGeneratedText(generatedText);
+  }
+  return "";
 }
 
 async function getGenerator(): Promise<TextGenerationPipeline> {
@@ -68,14 +94,18 @@ export function buildLocalSystemPrompt(language: string): string {
  */
 export async function localGenerate(
   messages: Array<{ role: string; content: string }>,
-  options: { maxNewTokens?: number } = {},
+  options: {
+    maxNewTokens?: number;
+    maxMessages?: number;
+    maxCharsPerMessage?: number;
+  } = {},
 ): Promise<string> {
   const pipe = await getGenerator();
   const size = getModelSize();
 
   // Slightly more room for the 1.5B model
-  const maxMessages = size === "1.5b" ? 8 : 4;
-  const maxChars = size === "1.5b" ? 1600 : 1000;
+  const maxMessages = options.maxMessages ?? (size === "1.5b" ? 8 : 4);
+  const maxChars = options.maxCharsPerMessage ?? (size === "1.5b" ? 1600 : 1000);
   const defaultTokens = size === "1.5b" ? 1024 : 384;
 
   const trimmed = messages.slice(-maxMessages).map((m) => ({
@@ -90,19 +120,12 @@ export async function localGenerate(
   });
 
   const raw = Array.isArray(result) ? result[0] : result;
-  const generated =
-    (raw as any)?.generated_text ??
-    (raw as any)?.[0]?.generated_text ??
-    (typeof raw === "string" ? raw : JSON.stringify(raw));
-
-  if (typeof generated === "string") {
-    const parts = generated.split(/(?:^|\n)assistant\s*/i);
-    const last = parts[parts.length - 1]?.trim();
-    if (last && last.length > 0) return last;
-    return generated.trim();
-  }
-
-  return String(generated);
+  const generated = extractGeneratedText(
+    (raw as { generated_text?: unknown })?.generated_text ?? raw,
+  );
+  const parts = generated.split(/(?:^|\n)assistant\s*/i);
+  const last = parts[parts.length - 1]?.trim();
+  return last || generated.trim();
 }
 
 export const LOCAL_MODEL_ID = getModelId();

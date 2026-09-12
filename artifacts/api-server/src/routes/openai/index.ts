@@ -1,7 +1,15 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
-import { localGenerate, buildLocalSystemPrompt } from "@workspace/integrations-local-ai";
+import {
+  localGenerate,
+  localAgentTurn,
+  buildLocalToolResultMessage,
+  buildLocalSystemPrompt,
+  localWebSearch,
+  toLocalToolDefinitions,
+  type LocalChatMessage,
+} from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
@@ -57,17 +65,17 @@ async function loadMemories(userId: number): Promise<string> {
 
 async function extractAndSaveMemories(userId: number, userMessage: string): Promise<void> {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: [{
-        role: "user",
-        parts: [{
-          text: `Extract personal facts about the user from this message. Only extract clear, first-person facts (name, age, job, location, preferences, etc.). If there are no personal facts, reply with exactly: NONE\n\nMessage: "${userMessage.slice(0, 500)}"\n\nReply with one fact per line, or NONE.`,
-        }],
-      }],
-      config: { maxOutputTokens: 100 },
-    });
-    const text = response.text?.trim() ?? "";
+    const prompt = `Extract personal facts about the user from this message. Only extract clear, first-person facts (name, age, job, location, preferences, etc.). If there are no personal facts, reply with exactly: NONE\n\nMessage: "${userMessage.slice(0, 500)}"\n\nReply with one fact per line, or NONE.`;
+    const text = getAiProvider() === "local"
+      ? (await localGenerate([
+          { role: "system", content: "You extract memory facts. Reply with facts or exactly NONE." },
+          { role: "user", content: prompt },
+        ], { maxNewTokens: 100, maxMessages: 2, maxCharsPerMessage: 1200 })).trim()
+      : (await ai.models.generateContent({
+          model: "gemini-3.6-flash",
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: { maxOutputTokens: 100 },
+        })).text?.trim() ?? "";
     if (!text || text === "NONE") return;
     const facts = text.split("\n").map((f) => f.trim()).filter((f) => f && f !== "NONE");
     for (const fact of facts) {
@@ -91,21 +99,17 @@ async function extractAndSaveMemories(userId: number, userMessage: string): Prom
 
 async function generateTitle(userMessage: string, log?: { error: (o: unknown, m: string) => void }): Promise<string> {
   try {
-    const titleResponse = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: [{
-        role: "user",
-        parts: [{
-          text: `Create a short, specific title (2-5 words) for a chat that starts with this message. Rules: be specific about the actual topic (e.g. "React useState Hook Bug", "Python CSV Parser", "Sort Algorithm Comparison"), use Title Case, no quotes, no punctuation at the end. Reply with ONLY the title.\n\nMessage: "${userMessage.slice(0, 500)}"`,
-        }],
-      }],
-      config: {
-        maxOutputTokens: 50,
-        temperature: 0.3,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    });
-    const raw = titleResponse.text?.trim() ?? "";
+    const prompt = `Create a short, specific title (2-5 words) for a chat that starts with this message. Rules: be specific about the actual topic (e.g. "React useState Hook Bug", "Python CSV Parser", "Sort Algorithm Comparison"), use Title Case, no quotes, no punctuation at the end. Reply with ONLY the title.\n\nMessage: "${userMessage.slice(0, 500)}"`;
+    const raw = getAiProvider() === "local"
+      ? (await localGenerate([
+          { role: "system", content: "Create concise chat titles. Reply with only the title." },
+          { role: "user", content: prompt },
+        ], { maxNewTokens: 50, maxMessages: 2, maxCharsPerMessage: 1200 })).trim()
+      : (await ai.models.generateContent({
+          model: "gemini-3.6-flash",
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: { maxOutputTokens: 50, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } },
+        })).text?.trim() ?? "";
     const candidate = raw.replace(/^["']|["'.,!?]$/g, "").trim();
     if (candidate && candidate.length > 1 && candidate.length < 80) return candidate;
     log?.error({ raw, candidate }, "[Axis] generateTitle: candidate rejected");
@@ -229,29 +233,115 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.flushHeaders();
 
     try {
-      // Short prompt tuned for small models + limited history
-      const localSystem = buildLocalSystemPrompt(convLanguage);
-      const localMessages = [
+      const localSystem = [
+        buildLocalSystemPrompt(convLanguage),
+        systemPrompt,
+        "IMAGE GENERATION IS NOT AVAILABLE in the free local mode. Explain that clearly if asked; do not emit an IMAGE_PROMPT tag.",
+        "If a current fact, price, news item, or other live information is needed, call web_search before answering.",
+      ].join("\n\n");
+      const localMessages: LocalChatMessage[] = [
         { role: "system", content: localSystem },
-        ...history.slice(-3).map((m) => ({
+        ...history.slice(-4).map((m): LocalChatMessage => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content
             .replace(/\[IMAGE:[^\]]*\]/g, "[image]")
             .replace(/\[FILEDATA:[^\]]*\]/g, "[file]")
-            .slice(0, 800),
+            .slice(0, 1800),
         })),
-        { role: "user", content: content.slice(0, 1200) },
+        { role: "user", content: content.slice(0, 2400) },
+      ];
+      const workingMessages = [...localMessages];
+      let reply = "";
+      const sources: Array<{ url: string; title: string }> = [];
+      const wantsGithubTool = /\b(github|repository|repo|branch|pull request|commit|connected (?:repo|repository)|read (?:the )?file|write (?:the )?file)\b/i.test(content);
+      const wantsWebSearch = /\b(search the web|look up|current|latest|today|news|recent|price|weather|stock)\b/i.test(content);
+      const localTools = [
+        ...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : []),
+        ...(wantsWebSearch ? [{
+          name: "web_search",
+          description: "Search the live web for current information and return source URLs.",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string", description: "The focused web search query" } },
+            required: ["query"],
+          },
+        }] : []),
       ];
 
-      const reply = await localGenerate(localMessages);
+      if (localTools.length === 0) {
+        reply = await localGenerate(workingMessages, { maxNewTokens: 1400, maxMessages: 8, maxCharsPerMessage: 2400 });
+      } else {
+        for (let turn = 0; turn < 8; turn++) {
+          const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 1200 });
+          if (decision.kind === "final") {
+            reply = decision.content;
+            break;
+          }
+
+          const toolId = `${Date.now()}-${turn}`;
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: `Used ${decision.name}` } })}\n\n`);
+          }
+
+          let result: { output?: unknown; error?: string };
+          if (decision.name === "web_search") {
+            try {
+              const search = await localWebSearch(String(decision.arguments.query ?? ""));
+              result = { output: search.sources };
+              for (const source of search.sources) sources.push({ url: source.url, title: source.title });
+            } catch (error) {
+              result = { error: error instanceof Error ? error.message : String(error) };
+            }
+          } else if (userId && (await isGithubReady(userId))) {
+            result = await executeGithubTool(userId, decision.name, decision.arguments);
+          } else {
+            result = { error: "No GitHub repository is connected/selected. Ask the person to connect GitHub and pick a repo in Settings." };
+          }
+
+          if (!res.writableEnded) {
+            const event = result.error
+              ? { toolError: { id: toolId, summary: `Used ${decision.name}`, error: result.error } }
+              : { toolDone: { id: toolId, summary: `Used ${decision.name}` } };
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+
+          workingMessages.push({
+            role: "assistant",
+            content: JSON.stringify({ action: "tool", name: decision.name, arguments: decision.arguments }),
+          });
+          workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
+        }
+      }
+
+      const fileBlockRe = /\[FILE:\s*([^\]\n]+)\]\s*\n```[\w-]*\n([\s\S]*?)```/gi;
+      let savedContent = reply.replace(fileBlockRe, (_, rawName: string, fileContent: string) => {
+        const filename = rawName.trim();
+        const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
+        const mimeType = getMimeType(ext);
+        const b64 = Buffer.from(fileContent).toString("base64");
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
+        }
+        return `[FILEDATA: ${filename}|${mimeType}|${b64}]`;
+      });
+      if (sources.length > 0 && !res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ sources })}\n\n`);
+      }
+
+      if (history.length === 0 && userId && id > 0) {
+        const newTitle = await generateTitle(content, req.log);
+        await db.update(conversations).set({ title: newTitle }).where(eq(conversations.id, id));
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ titleUpdate: newTitle })}\n\n`);
+      }
+      if (userId) extractAndSaveMemories(userId, content).catch(() => {});
 
       if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ content: reply })}\n\n`);
+        res.write(`data: ${JSON.stringify({ content: savedContent })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       }
 
-      if (userId && id > 0 && reply) {
-        await db.insert(messages).values({ conversationId: id, role: "assistant", content: reply });
+      if (userId && id > 0 && savedContent) {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
       }
     } catch (err) {
       const msg = friendlyGeminiErrorMessage(err, "Local model failed to generate a response");

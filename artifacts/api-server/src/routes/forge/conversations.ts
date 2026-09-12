@@ -1,10 +1,17 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages } from "@workspace/db";
 import { ai } from "@workspace/integrations-gemini-ai";
+import {
+  localAgentTurn,
+  buildLocalToolResultMessage,
+  toLocalToolDefinitions,
+  type LocalChatMessage,
+} from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { forgeToolDeclarations, executeForgeTool, truncateSummary } from "./forge-tools";
 import { FunctionCallingConfigMode, type FunctionCall } from "@google/genai";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
+import { getAiProvider } from "../../lib/ai-provider";
 
 const router: IRouter = Router();
 
@@ -152,6 +159,114 @@ api/_auth/logout (POST) invalidates the token. Any write_backend_handler code yo
 automatically receives the caller as req.user (null if signed out) — no extra wiring needed.
 
 ${isPersisted ? "" : "IMPORTANT: this person is not logged in, so anything you build with tools won't be saved. If they ask you to build something, let them know they should log in first so their work persists, before actually calling tools."}`;
+
+  if (getAiProvider() === "local") {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    let savedContent = "";
+    let lastToolError: string | null = null;
+    let endedNaturally = false;
+    try {
+      const workingMessages: LocalChatMessage[] = [
+        {
+          role: "system",
+          content: `${systemPrompt}\n\nYou are running in a free local model. Use the JSON tool protocol exactly. Do not claim an action is complete until its tool reports success.`,
+        },
+        ...history.slice(-5).map((m): LocalChatMessage => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: m.content.slice(0, 1800),
+        })),
+        { role: "user", content: content.slice(0, 3000) },
+      ];
+      const localTools = toLocalToolDefinitions(forgeToolDeclarations);
+
+      for (let turn = 0; turn < 16; turn++) {
+        const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 1400 });
+        if (decision.kind === "final") {
+          endedNaturally = true;
+          savedContent += decision.content;
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ content: decision.content })}\n\n`);
+          }
+          break;
+        }
+
+        const toolId = `${Date.now()}-${turn}`;
+        const summary = truncateSummary(decision.arguments.summary, decision.name);
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary } })}\n\n`);
+        }
+
+        const result = isPersisted
+          ? await executeForgeTool(id, decision.name, decision.arguments)
+          : { error: "This person isn't logged in yet, so building can't be saved. Ask them to log in first." };
+        if (result.error) {
+          lastToolError = result.error;
+          req.log.error({ tool: decision.name, args: decision.arguments, error: result.error }, "[Forge] Local tool execution failed");
+        }
+        savedContent += result.error ? `\n\n✗ ${summary} — ${result.error}` : `\n\n✓ ${summary}`;
+        if (!res.writableEnded) {
+          const event = result.error
+            ? { toolError: { id: toolId, summary, error: result.error } }
+            : { toolDone: { id: toolId, summary } };
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+        workingMessages.push({
+          role: "assistant",
+          content: JSON.stringify({ action: "tool", name: decision.name, arguments: decision.arguments }),
+        });
+        workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
+      }
+
+      if (!endedNaturally && isPersisted) {
+        const previewSummary = "Verified app is ready to run";
+        const previewToolId = `${Date.now()}-final-preview`;
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: previewToolId, name: "run_preview", summary: previewSummary } })}\n\n`);
+        }
+        const previewResult = await executeForgeTool(id, "run_preview", { summary: previewSummary });
+        if (!previewResult.error) {
+          endedNaturally = true;
+          savedContent += `\n\n✓ ${previewSummary}.`;
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolDone: { id: previewToolId, summary: previewSummary } })}\n\n`);
+          }
+        } else {
+          lastToolError = previewResult.error;
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolError: { id: previewToolId, summary: previewSummary, error: previewResult.error } })}\n\n`);
+          }
+        }
+      }
+
+      if (!endedNaturally) {
+        const fallback = lastToolError
+          ? `\n\nI couldn't complete the app. The completed steps were kept. Last error: \`${lastToolError}\``
+          : "\n\nThe local model reached its safety limit. The completed steps were kept; retry to continue.";
+        savedContent += fallback;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
+      }
+
+      if (isPersisted && savedContent) {
+        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
+      }
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      }
+    } catch (err) {
+      const friendlyMessage = friendlyGeminiErrorMessage(err, "Local model failed to build the app");
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ error: friendlyMessage })}\n\n`);
+        res.end();
+      }
+    }
+    return;
+  }
 
   const chatMessages: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [
     ...history.map((m) => ({

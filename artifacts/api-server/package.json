@@ -23,8 +23,10 @@
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-session": "^1.19.0",
+    "onnxruntime-node": "^1.21.0",
     "pino": "^9",
     "pino-http": "^10",
+    "sharp": "^0.34.5",
     "zod": "catalog:"
   },
   "devDependencies": {
