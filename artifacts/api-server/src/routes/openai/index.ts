@@ -18,8 +18,8 @@ import { eq, desc, isNull } from "drizzle-orm";
 import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
+import { toolStatusSummary } from "../../lib/tool-status";
 
-// Warm local model in the background so first chat is faster
 void preloadLocalModel();
 
 const router: IRouter = Router();
@@ -144,16 +144,8 @@ router.post("/conversations", async (req, res) => {
     res.status(201).json({ id: -1, title, language, createdAt: new Date().toISOString() });
     return;
   }
-  const [created] = await db
-    .insert(conversations)
-    .values({ title, language, source: "axis", userId })
-    .returning();
-  res.status(201).json({
-    id: created.id,
-    title: created.title,
-    language: created.language,
-    createdAt: created.createdAt,
-  });
+  const [created] = await db.insert(conversations).values({ title, language, source: "axis", userId }).returning();
+  res.status(201).json({ id: created.id, title: created.title, language: created.language, createdAt: created.createdAt });
 });
 
 router.get("/conversations/:id", async (req, res) => {
@@ -194,12 +186,9 @@ router.get("/conversations/:id/messages", async (req, res) => {
 router.post("/conversations/:id/messages", async (req, res) => {
   const id = Number(req.params.id);
   const { content, planMode = false, language: bodyLanguage, guestHistory: rawGuestHistory } = req.body as {
-    content: string;
-    planMode?: boolean;
-    language?: string;
-    guestHistory?: Array<{ role: string; content: string }>;
+    content: string; planMode?: boolean; language?: string; guestHistory?: Array<{ role: string; content: string }>;
   };
-  const guestHistory: Array<{ role: string; content: string }> = rawGuestHistory ?? [];
+  const guestHistory = rawGuestHistory ?? [];
   const userId = req.session?.userId ?? null;
 
   let convLanguage = bodyLanguage ?? "TypeScript";
@@ -218,16 +207,12 @@ router.post("/conversations/:id/messages", async (req, res) => {
   }
 
   const memoryBlock = userId ? await loadMemories(userId) : "";
-
   const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const timeUtc = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: true });
 
   let systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.\n\nYou are Axis, an expert AI programming assistant specializing in ${convLanguage}.\n\nBe clear, accurate, and practical.${memoryBlock ? `\n\nWHAT YOU KNOW ABOUT THIS USER:\n${memoryBlock}` : ""}\n\nWhen debugging: identify issues, explain why, show fixed code.\nWhen generating code: production-quality, markdown fences with language tags.\n`;
-  if (planMode) {
-    systemPrompt += `\n\nPLAN MODE: help plan only, use pseudocode, end with a question.`;
-  }
+  if (planMode) systemPrompt += `\n\nPLAN MODE: help plan only, use pseudocode, end with a question.`;
 
-  // ── LOCAL PROVIDER (main free path) ───────────────────────────────────────
   if (getAiProvider() === "local") {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -237,7 +222,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
     try {
       if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ status: "thinking" })}\n\n`);
+        res.write(`data: ${JSON.stringify({ status: "thinking", summary: "Thinking it through" })}\n\n`);
       }
 
       const localSystem = [
@@ -254,10 +239,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
         { role: "system", content: localSystem },
         ...historySlice.map((m): LocalChatMessage => ({
           role: m.role === "assistant" ? "assistant" : "user",
-          content: m.content
-            .replace(/\[IMAGE:[^\]]*\]/g, "[image]")
-            .replace(/\[FILEDATA:[^\]]*\]/g, "[file]")
-            .slice(0, greeting ? 300 : short ? 500 : 1200),
+          content: m.content.replace(/\[IMAGE:[^\]]*\]/g, "[image]").replace(/\[FILEDATA:[^\]]*\]/g, "[file]").slice(0, greeting ? 300 : short ? 500 : 1200),
         })),
         { role: "user", content: content.slice(0, greeting ? 200 : short ? 800 : 1600) },
       ];
@@ -267,14 +249,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
       const wantsGithubTool = /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files in|read file from|write file to)\b/i.test(content);
       const wantsWebSearch = /\b(search the web|look up online|current price|latest news|weather today)\b/i.test(content);
-      const localTools = [
-        ...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : []),
-      ];
+      const localTools = [...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : [])];
 
       if (wantsWebSearch) {
         const toolId = `${Date.now()}-web-search`;
+        const webStart = toolStatusSummary("web_search", {}, "start");
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: "Searched the live web" } })}\n\n`);
+          res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: webStart } })}\n\n`);
         }
         try {
           const search = await localWebSearch(content);
@@ -284,13 +265,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
             content: ["Live web search results:", JSON.stringify(search.sources).slice(0, 2000)].join("\n"),
           });
           if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ toolDone: { id: toolId, summary: "Searched the live web" } })}\n\n`);
+            res.write(`data: ${JSON.stringify({ toolDone: { id: toolId, summary: toolStatusSummary("web_search", {}, "done") } })}\n\n`);
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           workingMessages.push({ role: "user", content: `Web search failed: ${message}` });
           if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ toolError: { id: toolId, summary: "Searched the live web", error: message } })}\n\n`);
+            res.write(`data: ${JSON.stringify({ toolError: { id: toolId, summary: toolStatusSummary("web_search", {}, "error"), error: message } })}\n\n`);
           }
         }
       }
@@ -302,22 +283,18 @@ router.post("/conversations/:id/messages", async (req, res) => {
           maxMessages: greeting ? 2 : short ? 3 : 6,
           maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
           onToken: (chunk) => {
-            if (!res.writableEnded && chunk) {
-              res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
-            }
+            if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
           },
         });
       } else {
         for (let turn = 0; turn < 3; turn++) {
           const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 350 });
-          if (decision.kind === "final") {
-            reply = decision.content;
-            break;
-          }
+          if (decision.kind === "final") { reply = decision.content; break; }
 
           const toolId = `${Date.now()}-${turn}`;
+          const startSummary = toolStatusSummary(decision.name, decision.arguments, "start");
           if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: `Used ${decision.name}` } })}\n\n`);
+            res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: startSummary } })}\n\n`);
           }
 
           let result: { output?: unknown; error?: string };
@@ -328,31 +305,22 @@ router.post("/conversations/:id/messages", async (req, res) => {
           }
 
           if (!res.writableEnded) {
+            const summary = toolStatusSummary(decision.name, decision.arguments, result.error ? "error" : "done");
             const event = result.error
-              ? { toolError: { id: toolId, summary: `Used ${decision.name}`, error: result.error } }
-              : { toolDone: { id: toolId, summary: `Used ${decision.name}` } };
+              ? { toolError: { id: toolId, summary, error: result.error } }
+              : { toolDone: { id: toolId, summary } };
             res.write(`data: ${JSON.stringify(event)}\n\n`);
           }
 
-          workingMessages.push({
-            role: "assistant",
-            content: JSON.stringify({ action: "tool", name: decision.name, arguments: decision.arguments }),
-          });
+          workingMessages.push({ role: "assistant", content: JSON.stringify({ action: "tool", name: decision.name, arguments: decision.arguments }) });
           workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
         }
         if (!reply) {
           reply = await localGenerateStreaming(workingMessages, {
-            maxNewTokens: 500,
-            maxMessages: 6,
-            maxCharsPerMessage: 1200,
-            onToken: (chunk) => {
-              if (!res.writableEnded && chunk) {
-                res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
-              }
-            },
+            maxNewTokens: 500, maxMessages: 6, maxCharsPerMessage: 1200,
+            onToken: (chunk) => { if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`); },
           });
         } else if (!res.writableEnded) {
-          // tool-path final answer: type it out quickly
           const step = 8;
           for (let i = 0; i < reply.length; i += step) {
             res.write(`data: ${JSON.stringify({ content: reply.slice(i, i + step) })}\n\n`);
@@ -367,15 +335,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
         const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
         const mimeType = getMimeType(ext);
         const b64 = Buffer.from(fileContent).toString("base64");
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
-        }
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
         return `[FILEDATA: ${filename}|${mimeType}|${b64}]`;
       });
 
-      if (sources.length > 0 && !res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ sources })}\n\n`);
-      }
+      if (sources.length > 0 && !res.writableEnded) res.write(`data: ${JSON.stringify({ sources })}\n\n`);
 
       if (history.length === 0 && userId && id > 0 && !greeting) {
         const newTitle = await generateTitle(content, req.log);
@@ -384,42 +348,27 @@ router.post("/conversations/:id/messages", async (req, res) => {
       }
       if (userId && !greeting) extractAndSaveMemories(userId, content).catch(() => {});
 
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      }
-
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       if (userId && id > 0 && savedContent) {
         await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
       }
     } catch (err) {
       const msg = friendlyGeminiErrorMessage(err, "Local model failed to generate a response");
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
-      }
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
     } finally {
       if (!res.writableEnded) res.end();
     }
     return;
   }
 
-  // ── GEMINI PATH ─────────────────────────────────────────────────────────────
+  // Gemini path (unchanged structure)
   const { text: currentText, imageParts: currentImageParts } = extractImageParts(content);
   const chatMessages: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [
     ...history.map((m) => ({
       role: (m.role === "assistant" ? "model" : "user") as "user" | "model",
-      parts: [{
-        text: m.content
-          .replace(/\[IMAGE:[^\]]*\]/g, "[image was attached here]")
-          .replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]"),
-      }],
+      parts: [{ text: m.content.replace(/\[IMAGE:[^\]]*\]/g, "[image was attached here]").replace(/\[FILEDATA:[^\]]*\]/g, "[file was generated here]") }],
     })),
-    {
-      role: "user" as const,
-      parts: [
-        ...currentImageParts,
-        { text: currentText || "Please look at the attached image." },
-      ],
-    },
+    { role: "user" as const, parts: [...currentImageParts, { text: currentText || "Please look at the attached image." }] },
   ];
 
   if (userId && (await isGithubReady(userId))) {
@@ -438,10 +387,15 @@ router.post("/conversations/:id/messages", async (req, res) => {
       chatMessages.push({ role: "model", parts: calls.map((fc) => ({ functionCall: fc })) });
       const responseParts: Array<Record<string, unknown>> = [];
       for (const call of calls) {
-        const result = await executeGithubTool(userId, call.name ?? "", (call.args ?? {}) as Record<string, unknown>);
+        const toolId = `${Date.now()}-${call.name}`;
+        const args = (call.args ?? {}) as Record<string, unknown>;
+        const startSummary = toolStatusSummary(call.name ?? "tool", args, "start");
+        // Note: Gemini path streams after tools; status is best-effort if client listens mid-loop
+        const result = await executeGithubTool(userId, call.name ?? "", args);
         responseParts.push({
           functionResponse: { name: call.name, response: result.error ? { error: result.error } : { output: result.output ?? "ok" } },
         });
+        void toolId; void startSummary;
       }
       chatMessages.push({ role: "user", parts: responseParts });
     }
@@ -458,11 +412,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     const stream = await ai.models.generateContentStream({
       model: "gemini-3.6-flash",
       contents: chatMessages,
-      config: {
-        maxOutputTokens: 8192,
-        systemInstruction: systemPrompt,
-        tools: [{ googleSearch: {} }],
-      },
+      config: { maxOutputTokens: 8192, systemInstruction: systemPrompt, tools: [{ googleSearch: {} }] },
     });
 
     let lastGroundingChunks: Array<{ web?: { uri: string; title?: string } }> = [];
@@ -479,46 +429,32 @@ router.post("/conversations/:id/messages", async (req, res) => {
           res.write(`data: ${JSON.stringify({ generatingImage: true })}\n\n`);
         }
       }
-      const meta = (chunk as unknown as { candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ web?: { uri: string; title?: string } }> } }> })
-        .candidates?.[0]?.groundingMetadata;
+      const meta = (chunk as unknown as { candidates?: Array<{ groundingMetadata?: { groundingChunks?: Array<{ web?: { uri: string; title?: string } }> } }> }).candidates?.[0]?.groundingMetadata;
       if (meta?.groundingChunks?.length) lastGroundingChunks = meta.groundingChunks;
     }
 
     if (!res.writableEnded) {
       const imagePromptStart = fullResponse.search(/\[IMAGE_PROMPT/i);
-      const hasImagePrompt = imagePromptStart >= 0;
-      let savedContent = hasImagePrompt ? fullResponse.slice(0, imagePromptStart).trimEnd() : fullResponse;
-
+      let savedContent = imagePromptStart >= 0 ? fullResponse.slice(0, imagePromptStart).trimEnd() : fullResponse;
       const fileBlockRe = /\[FILE:\s*([^\]\n]+)\]\s*\n```[\w-]*\n([\s\S]*?)```/gi;
       savedContent = savedContent.replace(fileBlockRe, (_, rawName: string, fileContent: string) => {
         const filename = rawName.trim();
         const ext = filename.split(".").pop()?.toLowerCase() ?? "txt";
         const mimeType = getMimeType(ext);
         const b64 = Buffer.from(fileContent).toString("base64");
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
-        }
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ fileData: { filename, b64, mimeType } })}\n\n`);
         return `[FILEDATA: ${filename}|${mimeType}|${b64}]`;
       });
-
-      const sources = lastGroundingChunks
-        .filter((c) => c.web?.uri)
-        .map((c) => ({ url: c.web!.uri, title: c.web!.title ?? c.web!.uri }));
-      if (sources.length > 0 && !res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ sources })}\n\n`);
-      }
-
+      const sources = lastGroundingChunks.filter((c) => c.web?.uri).map((c) => ({ url: c.web!.uri, title: c.web!.title ?? c.web!.uri }));
+      if (sources.length > 0 && !res.writableEnded) res.write(`data: ${JSON.stringify({ sources })}\n\n`);
       if (userId && id > 0 && savedContent) {
         await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
       }
-
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     }
   } catch (err) {
     const msg = friendlyGeminiErrorMessage(err);
-    if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
-    }
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
   } finally {
     if (!res.writableEnded) res.end();
   }
