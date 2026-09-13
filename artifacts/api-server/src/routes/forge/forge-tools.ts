@@ -332,19 +332,34 @@ async function executeForgeToolOnce(
   try {
     switch (name) {
       case "write_file": {
-        const path = String(rawArgs.path ?? "");
+        let path = String(rawArgs.path ?? "").trim().replace(/^\/+/, "");
+        if (!path) path = "index.html";
+        if (/^index\.hmtl$/i.test(path) || /^index\.htm$/i.test(path)) path = "index.html";
         const content = String(rawArgs.content ?? "");
-        if (!path) return { error: "path is required" };
-        const [existing] = await db.select().from(forgeAppFiles).where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
+        if (!content.trim()) return { error: "content is required — nothing was written" };
+        const [existing] = await db
+          .select()
+          .from(forgeAppFiles)
+          .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
         if (existing) {
-          await db.update(forgeAppFiles).set({ content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
+          await db
+            .update(forgeAppFiles)
+            .set({ content, updatedAt: new Date() })
+            .where(eq(forgeAppFiles.id, existing.id));
         } else {
           await db.insert(forgeAppFiles).values({ appId, path, content });
         }
-        return { output: `Wrote ${path}` };
+        const [verify] = await db
+          .select()
+          .from(forgeAppFiles)
+          .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
+        if (!verify || verify.content !== content) {
+          return { error: `Failed to persist ${path} to the database. Restart the Repl and try again.` };
+        }
+        return { output: `Wrote ${path} (${content.length} bytes)` };
       }
       case "delete_file": {
-        const path = String(rawArgs.path ?? "");
+        const path = String(rawArgs.path ?? "").trim().replace(/^\/+/, "");
         await db.delete(forgeAppFiles).where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
         return { output: `Deleted ${path}` };
       }
@@ -448,22 +463,22 @@ async function executeForgeToolOnce(
         const code = String(rawArgs.code ?? "");
         if (!method || !route || !code) return { error: "method, route, and code are all required" };
         await saveBackendHandler(appId, method, route, code);
-        return { output: `Defined ${method} ${route}` };
+        return { output: `Saved ${method} ${route}` };
       }
-      case "add_accounts":
-        return {
-          output:
-            "Accounts are enabled. POST api/_auth/signup and api/_auth/login (body: { email, password }) each return { user, token } — store that token client-side (e.g. localStorage) and send it as an 'Authorization: Bearer <token>' header on later requests. GET api/_auth/me returns the current user or null; POST api/_auth/logout invalidates the token. Any write_backend_handler code automatically receives the caller as req.user (null if signed out).",
-        };
+      case "add_accounts": {
+        return { output: "Accounts enabled for this app (signup/login endpoints active)." };
+      }
       case "run_preview": {
         const [entry] = await db
           .select()
           .from(forgeAppFiles)
           .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
         if (!entry) {
-          return { error: "No index.html yet — write one with write_file before previewing." };
+          const all = await db.select({ path: forgeAppFiles.path }).from(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
+          const names = all.map((r) => r.path).join(", ") || "(none)";
+          return { error: `No index.html yet — files present: ${names}` };
         }
-        return { output: "Preview is ready. The user can open it with the Run button." };
+        return { output: `Preview is ready (${entry.content.length} bytes in index.html). Open with Run.` };
       }
       default:
         return { error: `Unknown tool: ${name}` };
@@ -490,8 +505,10 @@ export async function executeForgeTool(
       };
     }
 
-    if (!isTransientDatabaseError(lastResult.error) || attempt === 2) return lastResult;
-    await pause(150 * 2 ** attempt);
+    if (!isTransientDatabaseError(lastResult.error) || attempt === 2) {
+      return lastResult;
+    }
+    await pause(150 * (attempt + 1));
   }
   return lastResult;
 }
