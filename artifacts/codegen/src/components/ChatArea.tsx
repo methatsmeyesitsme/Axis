@@ -127,7 +127,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
   const guestPendingUserRef = useRef<string>("");
   const thinkingStartedAtRef = useRef<number>(0);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const MIN_THINKING_MS = 1400;
+  const MIN_THINKING_MS = 0;
 
   const isGuest = conversationId !== null && conversationId < 0;
 
@@ -186,8 +186,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     if (!isStreaming) return;
     displayTimerRef.current = setInterval(() => {
       if (charQueueRef.current.length > 0) {
-        const batch = charQueueRef.current.slice(0, 1);
-        charQueueRef.current = charQueueRef.current.slice(1);
+        const batch = charQueueRef.current;
+        charQueueRef.current = "";
         setDisplayedContent((prev) => prev + batch);
       } else if (streamDoneRef.current) {
         clearInterval(displayTimerRef.current!);
@@ -219,7 +219,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
           queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
         }
       }
-    }, 8);
+    }, 1);
     return () => {
       if (displayTimerRef.current) clearInterval(displayTimerRef.current);
     };
@@ -501,8 +501,8 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
               }
             }}
             placeholder={placeholder}
-            className="min-h-[44px] max-h-32 resize-none pr-20"
-            rows={1}
+            className="min-h-[88px] max-h-64 resize-none pr-20 text-base"
+            rows={3}
           />
           <div className="absolute right-2 bottom-2 flex items-center gap-1">
             <button
