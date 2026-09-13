@@ -81,6 +81,29 @@ function wantsGithubImport(userText: string): boolean {
   return false;
 }
 
+/** Greetings / chitchat — never spin up the local model. */
+function isQuickChat(userText: string): boolean {
+  const t = userText.trim();
+  if (!t || t.length > 120) return false;
+  if (/^(hi|hello|hey|yo|sup|hiya|howdy)[!.?\s]*$/i.test(t)) return true;
+  if (/^(hi|hello|hey)\s+(there|forge|axis)[!.?\s]*$/i.test(t)) return true;
+  if (/^(thanks|thank you|thx|ok|okay|cool|great|nice)[!.?\s]*$/i.test(t)) return true;
+  if (/^(what can you (do|build)|help|how does this work)[?.!\s]*$/i.test(t)) return true;
+  if (t.split(/\s+/).length <= 6 && !/\b(make|build|create|write|pull|import|github|repo|html|css|app)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function quickChatReply(userText: string): string {
+  const t = userText.trim().toLowerCase();
+  if (/thank|thx/.test(t)) return "You're welcome! Describe an app to build, or say **pull from my connected repo**.";
+  if (/what can you|help|how does/.test(t)) {
+    return "I build small web apps. Try:\n- **make an app that says hi**\n- **pull from my connected repo**\nThen press **Run** to preview.";
+  }
+  return "Hi! Tell me what to build (e.g. **make an app that says hi**) or **pull from my connected repo**.";
+}
+
 function isToolProtocolLeak(text: string): boolean {
   return /["']?(write_file|delete_file|import_github_repo|run_preview|db_get|db_set|db_delete|db_list|create_table|table_list|table_insert|table_select|table_update|table_delete|write_backend_handler|add_accounts)["']?\s*:/i.test(text)
     || (/["']?file["']?\s*:/.test(text) && /["']?preview["']?\s*:/.test(text) && /["']?summary["']?\s*:/.test(text))
@@ -223,8 +246,14 @@ router.post("/:id/messages", async (req, res) => {
     };
 
     try {
-      // 1) GitHub import FIRST — never touch the local model for this.
-      if (wantsGithubImport(content)) {
+      // 0) Greetings / short chat — instant, no model
+      if (isQuickChat(content)) {
+        const msg = quickChatReply(content);
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        endedNaturally = true;
+      } else if (wantsGithubImport(content)) {
+        // 1) GitHub import — never touch the local model for this.
         if (!isPersisted) {
           const msg =
             "\n\nLog in and connect GitHub in **Settings** (PAT with repo scope), then try again: pull from my connected repo.";
@@ -258,7 +287,6 @@ router.post("/:id/messages", async (req, res) => {
           endedNaturally = true;
         }
       } else if (trySimpleAppBuild(content) && isPersisted) {
-        // 2) Simple one-page apps — deterministic, no model.
         const simple = trySimpleAppBuild(content)!;
         const writeResult = await runTool("write_file", {
           path: simple.path,
@@ -284,7 +312,6 @@ router.post("/:id/messages", async (req, res) => {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
       } else {
-        // 3) Complex builds — local agent (best-effort).
         const workingMessages: LocalChatMessage[] = [
           {
             role: "system",
