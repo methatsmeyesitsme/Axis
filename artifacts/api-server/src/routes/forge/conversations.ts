@@ -2,7 +2,6 @@ import { Router, type IRouter } from "express";
 import { db, conversations, messages } from "@workspace/db";
 import {
   localAgentTurn,
-  localGenerate,
   buildLocalToolResultMessage,
   toLocalToolDefinitions,
   type LocalChatMessage,
@@ -200,7 +199,6 @@ router.post("/:id/messages", async (req, res) => {
     };
 
     try {
-      // 1) Deterministic simple one-page apps (no model tool JSON required)
       const simple = trySimpleAppBuild(content);
       if (simple && isPersisted) {
         await runTool("write_file", {
@@ -214,7 +212,6 @@ router.post("/:id/messages", async (req, res) => {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
       } else if (wantsGithubImport(content) && isPersisted) {
-        // 2) Deterministic GitHub → Forge import
         await runTool("import_github_repo", {
           path: "",
           summary: "Imported GitHub repo",
@@ -225,7 +222,6 @@ router.post("/:id/messages", async (req, res) => {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
       } else {
-        // 3) General agent loop
         const workingMessages: LocalChatMessage[] = [
           {
             role: "system",
@@ -242,10 +238,8 @@ router.post("/:id/messages", async (req, res) => {
         for (let turn = 0; turn < 12; turn++) {
           const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 900 });
           if (decision.kind === "final") {
-            // Never surface tool-leak JSON to the user
             const text = decision.content.trim();
             if (text.startsWith("{") && text.includes("summary")) {
-              // Model failed again — if simple build possible, do it
               const fallback = trySimpleAppBuild(content);
               if (fallback && isPersisted) {
                 await runTool("write_file", {
@@ -272,7 +266,6 @@ router.post("/:id/messages", async (req, res) => {
             break;
           }
 
-          // If write_file has empty content, fill from simple builder when possible
           const args = { ...decision.arguments };
           if (decision.name === "write_file" && !String(args.content ?? "").trim()) {
             const filled = trySimpleAppBuild(content);
