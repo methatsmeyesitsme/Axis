@@ -172,6 +172,16 @@ export async function localAgentTurn(
     };
   }
 
+  // Small models sometimes "fill in the blank" and emit just the bare tool
+  // name (e.g. "github_list_files") instead of the required JSON wrapper.
+  // Without this, that raw name falls through and gets shown to the user
+  // verbatim as if it were the actual answer.
+  const bareName = raw.trim().replace(/^[`'"]+|[`'"]+$/g, "");
+  const bareMatch = tools.find((tool) => tool.name === bareName);
+  if (bareMatch) {
+    return { kind: "tool", name: bareMatch.name, arguments: {} };
+  }
+
   if (action === "final" && typeof parsed?.content === "string") {
     const content = parsed.content.trim();
     if (looksLikeToolSchemaDump(content)) {
@@ -211,6 +221,11 @@ export async function localAgentTurn(
 
     if ((retryAction === "tool" || Boolean(retryAliased)) && tools.some((tool) => tool.name === retryAliased)) {
       return { kind: "tool", name: retryAliased, arguments: inlineArguments(retryParsed) };
+    }
+    const retryBareName = retry.trim().replace(/^[`'"]+|[`'"]+$/g, "");
+    const retryBareMatch = tools.find((tool) => tool.name === retryBareName);
+    if (retryBareMatch) {
+      return { kind: "tool", name: retryBareMatch.name, arguments: {} };
     }
     const retryClean = retry.trim();
     if (retryClean && !looksLikeRefusal(retryClean) && !looksLikeToolSchemaDump(retryClean)) {
