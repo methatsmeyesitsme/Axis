@@ -8,14 +8,19 @@ import {
   isGreeting,
   preloadLocalModel,
   localWebSearch,
-  toLocalToolDefinitions,
   wantsImageGeneration,
   extractImagePrompt,
   localGenerateImage,
   type LocalChatMessage,
 } from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
-import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
+import {
+  executeGithubTool,
+  isGithubReady,
+  listGithubRepoPublic,
+  readGithubFilePublic,
+  parseOwnerRepo,
+} from "../github-tools";
 import { getAiProvider } from "../../lib/ai-provider";
 
 void preloadLocalModel();
@@ -41,13 +46,12 @@ function toolStatusSummary(
   return words.filter(Boolean).slice(0, 5).join(" ");
 }
 
-/** True if the model dumped a tool name / JSON instead of a real answer. */
 function isToolLeak(text: string): boolean {
   const t = text.trim();
   if (!t) return true;
   if (/^github_[\w]+$/.test(t)) return true;
   if (/^[\w]+_[\w_]+$/.test(t) && t.length < 60) return true;
-  if (t.startsWith("{") && (t.includes("\"summary\"") || t.includes("\"action\"") || t.includes("github_"))) return true;
+  if (t.startsWith("{") && (t.includes('"summary"') || t.includes('"action"') || t.includes("github_"))) return true;
   return false;
 }
 
@@ -58,7 +62,7 @@ function formatGithubPullAnswer(
   listError: string | null,
 ): string {
   if (listError) {
-    return `I tried to pull your connected GitHub repo but hit an error: ${listError}\n\nCheck Settings → GitHub (token + selected repo), then try again.`;
+    return `I tried to pull **${ownerRepoHint || "the repo"}** but hit an error: ${listError}\n\nIf the repo is private, connect GitHub in Settings and select it, then try again.`;
   }
 
   const files = items.filter((i) => i.type === "file" || !i.type);
@@ -69,7 +73,7 @@ function formatGithubPullAnswer(
     .slice(0, 40);
 
   const lines: string[] = [];
-  lines.push(ownerRepoHint ? `Here's what I pulled from **${ownerRepoHint}**:` : "Here's what I pulled from your connected GitHub repo:");
+  lines.push(`Here's what I pulled from **${ownerRepoHint || "your repo"}**:`);
   lines.push("");
 
   if (topNames.length === 0) {
@@ -77,7 +81,7 @@ function formatGithubPullAnswer(
   } else {
     lines.push("**Top-level items:**");
     for (const name of topNames) {
-      const isDir = dirs.some((d) => d.name === name || d.path?.endsWith(name));
+      const isDir = dirs.some((d) => d.name === name || d.path?.endsWith("/" + name) || d.path === name);
       lines.push(`- ${name}${isDir ? "/" : ""}`);
     }
   }
@@ -89,7 +93,7 @@ function formatGithubPullAnswer(
     lines.push(snippet + (readmeText.trim().length > 1200 ? "…" : ""));
   } else {
     lines.push("");
-    lines.push("No README found at the root. Ask me to open a specific file (e.g. package.json or src/index.ts) if you want more detail.");
+    lines.push("No README found at the root. Ask me to open a specific file if you want more detail.");
   }
 
   lines.push("");
@@ -267,9 +271,6 @@ router.post("/conversations/:id/messages", async (req, res) => {
       /\b[\w.-]+\/[\w.-]+\b/.test(content);
     const wantsWebSearch = /\b(search the web|look up online|current price|latest news|weather today)\b/i.test(content);
 
-    // Keep tools list for detection only — we execute GitHub ourselves.
-    void toLocalToolDefinitions(githubToolDeclarations);
-
     if (wantsWebSearch) {
       const toolId = `${Date.now()}-web`;
       if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: "web_search", summary: "Searching the web" } })}\n\n`);
@@ -285,50 +286,66 @@ router.post("/conversations/:id/messages", async (req, res) => {
     }
 
     if (wantsGithubTool) {
-      // Deterministic pull — never let the tiny model invent tool names as the answer.
-      if (!userId) {
-        reply = "Log in and connect GitHub in Settings first, then ask me to pull the repo again.";
-        await streamText(res, reply);
-      } else if (!(await isGithubReady(userId))) {
-        reply = "No GitHub repository is connected yet. Open Settings, connect GitHub, pick a repo, then try again.";
-        await streamText(res, reply);
-      } else {
-        const listId = `${Date.now()}-list`;
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ toolStart: { id: listId, name: "github_list_files", summary: "Listing repo files" } })}\n\n`);
-        }
-        const listed = await executeGithubTool(userId, "github_list_files", { path: "" });
-        if (!res.writableEnded) {
-          const summary = toolStatusSummary("github_list_files", {}, listed.error ? "error" : "done");
-          res.write(`data: ${JSON.stringify(listed.error ? { toolError: { id: listId, summary, error: listed.error } } : { toolDone: { id: listId, summary } })}\n\n`);
-        }
+      const parsed = parseOwnerRepo(content);
+      let listed: { output?: unknown; error?: string };
+      let hint = "your connected repo";
 
-        const items = Array.isArray(listed.output)
-          ? (listed.output as Array<{ name?: string; path?: string; type?: string }>)
-          : [];
-
-        let readmeText: string | null = null;
-        const readme = items.find((i) => /readme/i.test(String(i.path ?? i.name ?? "")) && i.type !== "dir");
-        if (readme?.path && !listed.error) {
-          const readId = `${Date.now()}-readme`;
-          if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ toolStart: { id: readId, name: "github_read_file", summary: "Reading README" } })}\n\n`);
-          }
-          const read = await executeGithubTool(userId, "github_read_file", { path: readme.path });
-          if (!res.writableEnded) {
-            const summary = toolStatusSummary("github_read_file", { path: readme.path }, read.error ? "error" : "done");
-            res.write(`data: ${JSON.stringify(read.error ? { toolError: { id: readId, summary, error: read.error } } : { toolDone: { id: readId, summary } })}\n\n`);
-          }
-          if (!read.error && typeof read.output === "string") readmeText = read.output;
-        }
-
-        const ownerRepoMatch = content.match(/\b([\w.-]+\/[\w.-]+)\b/);
-        const hint = ownerRepoMatch?.[1] ?? "your connected repo";
-        reply = formatGithubPullAnswer(hint, items, readmeText, listed.error ?? null);
-        await streamText(res, reply);
+      const listId = `${Date.now()}-list`;
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ toolStart: { id: listId, name: "github_list_files", summary: "Listing repo files" } })}\n\n`);
       }
+
+      if (parsed) {
+        hint = `${parsed.owner}/${parsed.repo}`;
+        listed = await listGithubRepoPublic(parsed.owner, parsed.repo, "", "main");
+        if (listed.error && userId && (await isGithubReady(userId))) {
+          listed = await executeGithubTool(userId, "github_list_files", { path: "" });
+        }
+      } else if (userId && (await isGithubReady(userId))) {
+        listed = await executeGithubTool(userId, "github_list_files", { path: "" });
+      } else {
+        listed = {
+          error: "Name a repo like owner/name (e.g. methatsmeyesitsme/Axis), or connect GitHub in Settings and select a repo.",
+        };
+      }
+
+      if (!res.writableEnded) {
+        const summary = toolStatusSummary("github_list_files", {}, listed.error ? "error" : "done");
+        res.write(`data: ${JSON.stringify(listed.error ? { toolError: { id: listId, summary, error: listed.error } } : { toolDone: { id: listId, summary } })}\n\n`);
+      }
+
+      const items = Array.isArray(listed.output)
+        ? (listed.output as Array<{ name?: string; path?: string; type?: string }>)
+        : [];
+
+      let readmeText: string | null = null;
+      const readme = items.find((i) => /readme/i.test(String(i.path ?? i.name ?? "")) && i.type !== "dir");
+      if (readme?.path && !listed.error) {
+        const readId = `${Date.now()}-readme`;
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: readId, name: "github_read_file", summary: "Reading README" } })}\n\n`);
+        }
+        let read: { output?: unknown; error?: string };
+        if (parsed) {
+          read = await readGithubFilePublic(parsed.owner, parsed.repo, readme.path, "main");
+        } else if (userId) {
+          read = await executeGithubTool(userId, "github_read_file", { path: readme.path });
+        } else {
+          read = { error: "Not connected" };
+        }
+        if (!res.writableEnded) {
+          const summary = toolStatusSummary("github_read_file", { path: readme.path }, read.error ? "error" : "done");
+          res.write(`data: ${JSON.stringify(read.error ? { toolError: { id: readId, summary, error: read.error } } : { toolDone: { id: readId, summary } })}\n\n`);
+        }
+        if (!read.error && typeof read.output === "string") readmeText = read.output;
+      }
+
+      reply = formatGithubPullAnswer(hint, items, readmeText, listed.error ?? null);
+      if (isToolLeak(reply)) {
+        reply = formatGithubPullAnswer(hint, items, readmeText, listed.error ?? "Unknown error");
+      }
+      await streamText(res, reply);
     } else {
-      // Normal chat — stream, then replace if the model leaked a tool name.
       let streamed = "";
       reply = await localGenerateStreaming(workingMessages, {
         fast: short || greeting,
@@ -337,13 +354,12 @@ router.post("/conversations/:id/messages", async (req, res) => {
         maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
         onToken: (chunk) => {
           streamed += chunk;
-          // Don't stream tool-name leaks live
           if (isToolLeak(streamed) && streamed.length < 80) return;
           if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
         },
       });
       if (isToolLeak(reply)) {
-        reply = "I couldn't answer that cleanly. Try asking again in a shorter way, or ask me to pull a specific GitHub file.";
+        reply = "I couldn't answer that cleanly. Try asking again, or name a GitHub repo like owner/name.";
         await streamText(res, reply);
       }
     }
@@ -357,7 +373,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     }
 
     if (!res.writableEnded) res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-    if (userId && id > 0 && reply) {
+    if (userId && id > 0 && reply && !isToolLeak(reply)) {
       await db.insert(messages).values({ conversationId: id, role: "assistant", content: reply });
     }
   } catch (error) {
