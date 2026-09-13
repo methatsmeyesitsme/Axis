@@ -11,7 +11,7 @@ import {
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Sparkles, Square, LogIn, Plus, Paperclip, X, ChevronDown, Globe } from "lucide-react";
+import { Send, Sparkles, Square, LogIn, Plus, Paperclip, X, ChevronDown, Globe, Copy, Check } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { AIThinkingRow } from "./AIStatusLabel";
@@ -36,6 +36,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
+  const [promptCopied, setPromptCopied] = useState(false);
   const [displayedContent, setDisplayedContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -471,9 +472,30 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
             </div>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground text-center mt-2">
-          {isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
-        </p>
+        <div className="flex items-center justify-center gap-3 mt-2">
+          <p className="text-xs text-muted-foreground text-center">
+            {isStreaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for new line"}
+          </p>
+          {input.trim() && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(input);
+                  setPromptCopied(true);
+                  setTimeout(() => setPromptCopied(false), 1500);
+                } catch {
+                  // Clipboard API can be unavailable — fail quietly.
+                }
+              }}
+              title="Copy prompt"
+              className="flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-foreground transition-colors shrink-0"
+            >
+              {promptCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              {promptCopied ? "Copied" : "Copy"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

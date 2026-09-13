@@ -182,15 +182,30 @@ export async function localAgentTurn(
     return { kind: "tool", name: bareMatch.name, arguments: {} };
   }
 
-  if (action === "final" && typeof parsed?.content === "string") {
-    const content = parsed.content.trim();
-    if (looksLikeToolSchemaDump(content)) {
-      return {
-        kind: "final",
-        content: "I couldn't use GitHub tools reliably on that request. Try asking a more specific question, or reconnect GitHub in Settings.",
-      };
+  if (action === "final") {
+    const rawContent = parsed?.content;
+    let content: string | null = null;
+
+    if (typeof rawContent === "string") {
+      content = rawContent.trim();
+    } else if (rawContent && typeof rawContent === "object" && !Array.isArray(rawContent)) {
+      // The model nested the answer as structured data (e.g. {"repo": "..."})
+      // instead of writing a plain sentence. Turn it into readable text
+      // rather than showing the person a raw JSON blob.
+      content = Object.entries(rawContent as Record<string, unknown>)
+        .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
+        .join("\n");
     }
-    return { kind: "final", content };
+
+    if (content) {
+      if (looksLikeToolSchemaDump(content)) {
+        return {
+          kind: "final",
+          content: "I couldn't use GitHub tools reliably on that request. Try asking a more specific question, or reconnect GitHub in Settings.",
+        };
+      }
+      return { kind: "final", content };
+    }
   }
 
   // Not valid tool JSON → treat as a normal answer (strip obvious instruction echoes)

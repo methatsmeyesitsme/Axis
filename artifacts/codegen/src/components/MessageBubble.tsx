@@ -328,6 +328,35 @@ function renderContent(text: string): React.ReactNode[] {
   return result;
 }
 
+function CopyMessageButton({ text, align }: { text: string; align: "left" | "right" }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard API can be unavailable (e.g. insecure context) — fail quietly.
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="Copy message"
+      className={`mt-1 flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-foreground transition-colors ${
+        align === "right" ? "self-end mr-11" : "self-start ml-11"
+      }`}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 export default function MessageBubble({
   role, content, isStreaming, isGeneratingImage,
   streamingImages, streamingFiles, sources,
@@ -339,44 +368,50 @@ export default function MessageBubble({
   const allFiles = parsedFiles.length > 0 ? parsedFiles : (streamingFiles ?? []);
 
   return (
-    <div
-      className={`flex gap-3 w-full ${isUser ? "justify-end" : "justify-start"}`}
-      style={{ animation: "fadeSlideIn 0.18s ease-out both" }}
-    >
-      <style>{`
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(6px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+    <div className={`flex flex-col w-full ${isUser ? "items-end" : "items-start"}`}>
+      <div
+        className={`flex gap-3 w-full ${isUser ? "justify-end" : "justify-start"}`}
+        style={{ animation: "fadeSlideIn 0.18s ease-out both" }}
+      >
+        <style>{`
+          @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+          }
+        `}</style>
 
-      {!isUser && <AIAvatar />}
+        {!isUser && <AIAvatar />}
 
-      <div className={`max-w-[85%] rounded-2xl px-5 py-4 ${
-        isUser
-          ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
-          : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
-      }`}>
-        <div className="text-[14.5px]">
-          {renderContent(text)}
-          {allImages.map((img, i) => (
-            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} maxWidth={isUser ? 240 : undefined} />
-          ))}
-          {isGeneratingImage && <CreatingImagePlaceholder />}
-          {allFiles.map((f, i) => (
-            <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
-          ))}
-          {sources && <SourcesList sources={sources} />}
-          {isStreaming && allImages.length === 0 && !isGeneratingImage && (
-            <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
-          )}
+        <div className={`max-w-[85%] rounded-2xl px-5 py-4 ${
+          isUser
+            ? "bg-primary text-primary-foreground rounded-tr-sm shadow-sm"
+            : "bg-card border border-border text-card-foreground rounded-tl-sm shadow-sm"
+        }`}>
+          <div className="text-[14.5px]">
+            {renderContent(text)}
+            {allImages.map((img, i) => (
+              <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} maxWidth={isUser ? 240 : undefined} />
+            ))}
+            {isGeneratingImage && <CreatingImagePlaceholder />}
+            {allFiles.map((f, i) => (
+              <FileDownloadCard key={i} filename={f.filename} b64={f.b64} mimeType={f.mimeType} />
+            ))}
+            {sources && <SourcesList sources={sources} />}
+            {isStreaming && allImages.length === 0 && !isGeneratingImage && (
+              <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle rounded-full" />
+            )}
+          </div>
         </div>
+
+        {isUser && (
+          <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-1">
+            <User className="w-4 h-4 text-muted-foreground" />
+          </div>
+        )}
       </div>
 
-      {isUser && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-1">
-          <User className="w-4 h-4 text-muted-foreground" />
-        </div>
+      {!isStreaming && text.trim() && (
+        <CopyMessageButton text={text} align={isUser ? "right" : "left"} />
       )}
     </div>
   );

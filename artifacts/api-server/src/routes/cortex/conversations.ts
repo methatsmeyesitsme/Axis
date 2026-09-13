@@ -6,11 +6,13 @@ import {
   localAgentTurn,
   buildLocalToolResultMessage,
   localWebSearch,
+  toLocalToolDefinitions,
   type LocalChatMessage,
 } from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
+import { githubToolDeclarations, executeGithubTool, isGithubReady } from "../github-tools";
 
 const router: IRouter = Router();
 
@@ -288,7 +290,10 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
       const sources: Array<{ url: string; title: string }> = [];
       let reply = "";
       const wantsWebSearch = /\b(search the web|look up|current|latest|today|news|recent|price|weather|stock)\b/i.test(content);
-      const localTools: never[] = [];
+      const wantsGithubTool =
+        /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is)\b/i.test(content) ||
+        /\b[\w.-]+\/[\w.-]+\b/.test(content);
+      const localTools = [...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : [])];
 
       if (wantsWebSearch) {
         const toolId = `${Date.now()}-web-search`;
@@ -333,7 +338,12 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
             res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary: `Used ${decision.name}` } })}\n\n`);
           }
 
-          const result: { output?: unknown; error?: string } = { error: "Web search is handled before generation in local mode." };
+          let result: { output?: unknown; error?: string };
+          if (userId && (await isGithubReady(userId))) {
+            result = await executeGithubTool(userId, decision.name, decision.arguments);
+          } else {
+            result = { error: "No GitHub repository is connected/selected. Connect GitHub in Settings and select a repo, then try again." };
+          }
           if (!res.writableEnded) {
             const event = result.error
               ? { toolError: { id: toolId, summary: `Used ${decision.name}`, error: result.error } }
