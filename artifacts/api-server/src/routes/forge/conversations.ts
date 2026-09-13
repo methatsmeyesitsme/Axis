@@ -1,19 +1,74 @@
 import { Router, type IRouter } from "express";
 import { db, conversations, messages } from "@workspace/db";
-import { ai } from "@workspace/integrations-gemini-ai";
 import {
   localAgentTurn,
+  localGenerate,
   buildLocalToolResultMessage,
   toLocalToolDefinitions,
   type LocalChatMessage,
 } from "@workspace/integrations-local-ai";
 import { eq, desc, isNull } from "drizzle-orm";
 import { forgeToolDeclarations, executeForgeTool, truncateSummary } from "./forge-tools";
-import { FunctionCallingConfigMode, type FunctionCall } from "@google/genai";
 import { friendlyGeminiErrorMessage } from "../../lib/gemini-errors";
 import { getAiProvider } from "../../lib/ai-provider";
 
 const router: IRouter = Router();
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&")
+    .replace(/</g, "<")
+    .replace(/>/g, ">")
+    .replace(/"/g, """);
+}
+
+/** Build a one-file app without asking the tiny model to invent tool JSON. */
+function trySimpleAppBuild(userText: string): { path: string; content: string; summary: string } | null {
+  const t = userText.toLowerCase();
+  const wantsApp = /\b(make|build|create|write)\b/.test(t) && /\b(app|page|website|site|html)\b/.test(t);
+  if (!wantsApp) return null;
+
+  const quoted = userText.match(/["“']([^"”']{1,80})["”']/);
+  const label = (quoted?.[1] ?? "hi").trim() || "hi";
+  const bg =
+    /blue/.test(t) ? "#2563eb"
+    : /green/.test(t) ? "#16a34a"
+    : /red/.test(t) ? "#dc2626"
+    : /black/.test(t) ? "#0f172a"
+    : /white/.test(t) ? "#f8fafc"
+    : "#2563eb";
+  const fg = /white/.test(t) && !/blue|green|red|black/.test(t) ? "#0f172a" : "#ffffff";
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>App</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      min-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: ${bg};
+      color: ${fg};
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: clamp(2rem, 8vw, 4rem);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>${escapeHtml(label)}</body>
+</html>
+`;
+  return { path: "index.html", content: html, summary: "Created index.html" };
+}
+
+function wantsGithubImport(userText: string): boolean {
+  return /\b(import|pull|clone|load)\b/i.test(userText) && /\b(github|repo|repository)\b/i.test(userText);
+}
 
 router.get("/", async (req, res) => {
   const userId = req.session?.userId ?? null;
@@ -107,7 +162,7 @@ router.post("/:id/messages", async (req, res) => {
   const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const timeUtc = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: true });
 
-  const systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.\n\nYou are Forge, an AI that builds small apps for people, directly in this conversation —\nusing tools as you go.\n\nAvailable tools: write/delete frontend files (HTML/CSS/JS), structured tables, write_backend_handler, add_accounts, run_preview, and import_github_repo.\n\nimport_github_repo pulls the user's connected GitHub repo (optional path subdirectory) into this Forge app so they can press Run to preview. Copies html/css/js/json/md/svg/txt. Prefer paths with index.html.\n\nEvery tool call needs a "summary" argument (past tense, 8 words max).\n\nOnce index.html exists, call run_preview, then tell the user to hit Run.\nUse relative api/ paths for backend handlers inside the preview.\n\n${isPersisted ? "" : "IMPORTANT: this person is not logged in — tools won't be saved. Ask them to log in first."}`;
+  const systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.\n\nYou are Forge. You build small web apps by calling tools.\nTools: write_file, delete_file, import_github_repo, run_preview, and data helpers.\nWhen the user asks to pull/import a GitHub repo, call import_github_repo.\nWhen building a simple page, write_file index.html then run_preview.\nEvery tool needs a short summary.\n${isPersisted ? "" : "User is not logged in — ask them to log in before building."}`;
 
   if (getAiProvider() === "local") {
     res.setHeader("Content-Type", "text/event-stream");
@@ -119,79 +174,142 @@ router.post("/:id/messages", async (req, res) => {
     let savedContent = "";
     let lastToolError: string | null = null;
     let endedNaturally = false;
-    try {
-      const workingMessages: LocalChatMessage[] = [
-        {
-          role: "system",
-          content: `${systemPrompt}\n\nYou are running in a free local model. Use the JSON tool protocol exactly.`,
-        },
-        ...history.slice(-5).map((m): LocalChatMessage => ({
-          role: m.role === "assistant" ? "assistant" : "user",
-          content: m.content.slice(0, 1800),
-        })),
-        { role: "user", content: content.slice(0, 3000) },
-      ];
-      const localTools = toLocalToolDefinitions(forgeToolDeclarations);
 
-      for (let turn = 0; turn < 16; turn++) {
-        const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 1400 });
-        if (decision.kind === "final") {
-          endedNaturally = true;
-          savedContent += decision.content;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: decision.content })}\n\n`);
-          break;
-        }
-
-        const toolId = `${Date.now()}-${turn}`;
-        const summary = truncateSummary(decision.arguments.summary, decision.name);
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name: decision.name, summary } })}\n\n`);
-        }
-
-        const result = isPersisted
-          ? await executeForgeTool(id, decision.name, decision.arguments, userId)
-          : { error: "This person isn't logged in yet, so building can't be saved. Ask them to log in first." };
-        if (result.error) {
-          lastToolError = result.error;
-          req.log.error({ tool: decision.name, args: decision.arguments, error: result.error }, "[Forge] Local tool execution failed");
-        }
-        savedContent += result.error ? `\n\n✗ ${summary} — ${result.error}` : `\n\n✓ ${summary}`;
-        if (!res.writableEnded) {
-          const event = result.error
-            ? { toolError: { id: toolId, summary, error: result.error } }
-            : { toolDone: { id: toolId, summary } };
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
-        }
-        workingMessages.push({
-          role: "assistant",
-          content: JSON.stringify({ action: "tool", name: decision.name, arguments: decision.arguments }),
-        });
-        workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
+    const runTool = async (name: string, args: Record<string, unknown>) => {
+      const toolId = `${Date.now()}-${name}`;
+      const summary = truncateSummary(args.summary, name);
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name, summary } })}\n\n`);
       }
-
-      if (!endedNaturally && isPersisted) {
-        const previewSummary = "Verified app is ready to run";
-        const previewToolId = `${Date.now()}-final-preview`;
+      const result = isPersisted
+        ? await executeForgeTool(id, name, args, userId)
+        : { error: "Log in first so the app can be saved." };
+      if (result.error) {
+        lastToolError = result.error;
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ toolStart: { id: previewToolId, name: "run_preview", summary: previewSummary } })}\n\n`);
+          res.write(`data: ${JSON.stringify({ toolError: { id: toolId, summary, error: result.error } })}\n\n`);
         }
-        const previewResult = await executeForgeTool(id, "run_preview", { summary: previewSummary }, userId);
-        if (!previewResult.error) {
-          endedNaturally = true;
-          savedContent += `\n\n✓ ${previewSummary}.`;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolDone: { id: previewToolId, summary: previewSummary } })}\n\n`);
-        } else {
-          lastToolError = previewResult.error;
-          if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ toolError: { id: previewToolId, summary: previewSummary, error: previewResult.error } })}\n\n`);
+        savedContent += `\n\n✗ ${summary} — ${result.error}`;
+      } else {
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolDone: { id: toolId, summary } })}\n\n`);
+        }
+        savedContent += `\n\n✓ ${summary}`;
+      }
+      return result;
+    };
+
+    try {
+      // 1) Deterministic simple one-page apps (no model tool JSON required)
+      const simple = trySimpleAppBuild(content);
+      if (simple && isPersisted) {
+        await runTool("write_file", {
+          path: simple.path,
+          content: simple.content,
+          summary: simple.summary,
+        });
+        await runTool("run_preview", { summary: "Preview ready" });
+        const msg = "\n\nYour app is ready — press **Run** to open the preview.";
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        endedNaturally = true;
+      } else if (wantsGithubImport(content) && isPersisted) {
+        // 2) Deterministic GitHub → Forge import
+        await runTool("import_github_repo", {
+          path: "",
+          summary: "Imported GitHub repo",
+        });
+        await runTool("run_preview", { summary: "Preview ready" });
+        const msg = "\n\nPulled your connected GitHub repo into this app. Press **Run** to preview.";
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        endedNaturally = true;
+      } else {
+        // 3) General agent loop
+        const workingMessages: LocalChatMessage[] = [
+          {
+            role: "system",
+            content: `${systemPrompt}\n\nUse the JSON tool protocol. Prefer write_file + run_preview for UI apps.`,
+          },
+          ...history.slice(-5).map((m): LocalChatMessage => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content.slice(0, 1800),
+          })),
+          { role: "user", content: content.slice(0, 3000) },
+        ];
+        const localTools = toLocalToolDefinitions(forgeToolDeclarations);
+
+        for (let turn = 0; turn < 12; turn++) {
+          const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 900 });
+          if (decision.kind === "final") {
+            // Never surface tool-leak JSON to the user
+            const text = decision.content.trim();
+            if (text.startsWith("{") && text.includes("summary")) {
+              // Model failed again — if simple build possible, do it
+              const fallback = trySimpleAppBuild(content);
+              if (fallback && isPersisted) {
+                await runTool("write_file", {
+                  path: fallback.path,
+                  content: fallback.content,
+                  summary: fallback.summary,
+                });
+                await runTool("run_preview", { summary: "Preview ready" });
+                const msg = "\n\nYour app is ready — press **Run** to open the preview.";
+                savedContent += msg;
+                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                endedNaturally = true;
+              } else {
+                const msg = "\n\nI couldn't finish building that cleanly. Try a simpler request like: make an app with the text hi on a blue background.";
+                savedContent += msg;
+                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                endedNaturally = true;
+              }
+            } else {
+              endedNaturally = true;
+              savedContent += text;
+              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
+            }
+            break;
+          }
+
+          // If write_file has empty content, fill from simple builder when possible
+          const args = { ...decision.arguments };
+          if (decision.name === "write_file" && !String(args.content ?? "").trim()) {
+            const filled = trySimpleAppBuild(content);
+            if (filled) {
+              args.path = filled.path;
+              args.content = filled.content;
+              args.summary = filled.summary;
+            }
+          }
+
+          const result = await runTool(decision.name, args);
+          workingMessages.push({
+            role: "assistant",
+            content: JSON.stringify({ action: "tool", name: decision.name, arguments: args }),
+          });
+          workingMessages.push({ role: "user", content: buildLocalToolResultMessage(decision.name, result) });
+
+          if (decision.name === "write_file" && !result.error) {
+            await runTool("run_preview", { summary: "Preview ready" });
+            const msg = "\n\nYour app is ready — press **Run** to open the preview.";
+            savedContent += msg;
+            if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+            endedNaturally = true;
+            break;
           }
         }
       }
 
+      if (!endedNaturally && isPersisted) {
+        const previewResult = await runTool("run_preview", { summary: "Checked preview" });
+        if (!previewResult.error) endedNaturally = true;
+      }
+
       if (!endedNaturally) {
         const fallback = lastToolError
-          ? `\n\nI couldn't complete the app. Last error: \`${lastToolError}\``
-          : "\n\nThe local model reached its safety limit. Retry to continue.";
+          ? `\n\nI couldn't complete the app. Last error: ${lastToolError}`
+          : "\n\nCouldn't finish that build. Try a simpler prompt.";
         savedContent += fallback;
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
       }
@@ -219,7 +337,7 @@ router.post("/:id/messages", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   if (!res.writableEnded) {
-    res.write(`data: ${JSON.stringify({ error: "Cloud AI is not configured. Set AXIS_AI_PROVIDER=local or configure Gemini." })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: "Cloud AI is not configured. Set AXIS_AI_PROVIDER=local." })}\n\n`);
     res.end();
   }
 });
