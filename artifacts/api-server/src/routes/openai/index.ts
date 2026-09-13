@@ -102,7 +102,6 @@ function formatGithubPullAnswer(
   return lines.join("\n");
 }
 
-/** Deterministic app/repo description — never ask the tiny model (it often refuses). */
 function formatGithubDescribeAnswer(
   ownerRepoHint: string,
   items: Array<{ name?: string; path?: string; type?: string }>,
@@ -125,9 +124,7 @@ function formatGithubDescribeAnswer(
   parts.push("");
 
   if (has("artifacts") && has("lib") && (has("package.json") || has("pnpm-workspace.yaml"))) {
-    parts.push(
-      "It looks like **Axis** — a multi-package TypeScript monorepo (pnpm workspace) with:",
-    );
+    parts.push("It looks like **Axis** — a multi-package TypeScript monorepo (pnpm workspace) with:");
     parts.push("- **artifacts/** — apps (API server, codegen chat UI, Forge, previews)");
     parts.push("- **lib/** — shared libraries (local AI, DB, integrations)");
     parts.push("- Root workspace config (`package.json`, `pnpm-workspace.yaml`, tsconfigs)");
@@ -153,9 +150,7 @@ function formatGithubDescribeAnswer(
     parts.push(readmeText.trim().slice(0, 1500) + (readmeText.trim().length > 1500 ? "…" : ""));
   } else {
     parts.push("");
-    parts.push(
-      "There is no README at the root. Ask me to open something specific (e.g. `replit.md`, `package.json`, or a file under `artifacts/`) for more detail.",
-    );
+    parts.push("There is no README at the root. Ask me to open something specific (e.g. `replit.md`, `package.json`, or a file under `artifacts/`) for more detail.");
   }
 
   parts.push("");
@@ -175,7 +170,6 @@ function wantsGithubDescribe(text: string): boolean {
   return false;
 }
 
-/** Model often answers describe-repo with one fluff line — force tools instead. */
 function looksLikeWeakRepoAnswer(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return true;
@@ -214,10 +208,9 @@ async function generateTitle(userMessage: string): Promise<string> {
 
 async function streamText(res: import("express").Response, text: string): Promise<void> {
   if (res.writableEnded) return;
-  for (let i = 0; i < text.length; i += 12) {
+  for (let i = 0; i < text.length; i += 256) {
     if (res.writableEnded) return;
-    res.write(`data: ${JSON.stringify({ content: text.slice(i, i + 12) })}\n\n`);
-    await new Promise((r) => setTimeout(r, 8));
+    res.write(`data: ${JSON.stringify({ content: text.slice(i, i + 256) })}\n\n`);
   }
 }
 
