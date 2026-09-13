@@ -113,8 +113,9 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
 
     displayTimerRef.current = setInterval(() => {
       if (charQueueRef.current.length > 0) {
-        const batch = charQueueRef.current.slice(0, 1);
-        charQueueRef.current = charQueueRef.current.slice(1);
+        // Keep the typewriter feel without making long responses crawl.
+        const batch = charQueueRef.current.slice(0, 6);
+        charQueueRef.current = charQueueRef.current.slice(batch.length);
         setDisplayedContent((prev) => prev + batch);
       } else if (streamDoneRef.current) {
         clearInterval(displayTimerRef.current!);
@@ -143,7 +144,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
           queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
         }
       }
-    }, 8);
+    }, 6);
 
     return () => {
       if (displayTimerRef.current) clearInterval(displayTimerRef.current);
@@ -439,13 +440,13 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
                           <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
                         )}
                         <span className={step.status === "working" ? "text-muted-foreground" : "text-foreground"}>
-                          {step.status === "working" ? "Working" : step.summary}
+                          {step.summary}
                         </span>
                       </div>
                     ))}
                   </div>
                 )}
-                {(displayedContent.length > 0 || isStreaming) && (
+                {displayedContent.length > 0 && (
                   <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} />
                 )}
               </div>

@@ -24,6 +24,19 @@ interface ParsedContent {
 /** Never show bare tool names like github_list_files as the answer. */
 function sanitizeAssistantText(raw: string): string {
   const t = raw.trim();
+  const protocolText = t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  // Local tool-capable models can occasionally print their tool catalog as
+  // ordinary text. Never expose that protocol to the person using Forge.
+  if (
+    (t.startsWith("{") || t.startsWith("```")) &&
+    (
+      /["']?(write_file|delete_file|import_github_repo|run_preview|db_get|db_set|db_delete|db_list|create_table|table_list|table_insert|table_select|table_update|table_delete|write_backend_handler|add_accounts)["']?\s*:/.test(protocolText)
+      || (/["']?file["']?\s*:/.test(protocolText) && /["']?preview["']?\s*:/.test(protocolText) && /["']?summary["']?\s*:/.test(protocolText))
+      || (/["']?(action|tool|arguments)["']?\s*:/.test(protocolText) && /["']?(name|tool)["']?\s*:/.test(protocolText))
+    )
+  ) {
+    return "Working on that…";
+  }
   if (/^github_[\w]+$/.test(t)) {
     return "Pulling from GitHub… if this stays stuck, open Settings and reconnect GitHub, then try again.";
   }

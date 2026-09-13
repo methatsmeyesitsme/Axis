@@ -69,6 +69,12 @@ function wantsGithubImport(userText: string): boolean {
   return /\b(import|pull|clone|load)\b/i.test(userText) && /\b(github|repo|repository)\b/i.test(userText);
 }
 
+function isToolProtocolLeak(text: string): boolean {
+  return /["']?(write_file|delete_file|import_github_repo|run_preview|db_get|db_set|db_delete|db_list|create_table|table_list|table_insert|table_select|table_update|table_delete|write_backend_handler|add_accounts)["']?\s*:/i.test(text)
+    || (/["']?file["']?\s*:/.test(text) && /["']?preview["']?\s*:/.test(text) && /["']?summary["']?\s*:/.test(text))
+    || (/["']?(action|tool|arguments)["']?\s*:/.test(text) && /["']?(name|tool)["']?\s*:/.test(text));
+}
+
 router.get("/", async (req, res) => {
   const userId = req.session?.userId ?? null;
   const result = await db
@@ -169,6 +175,9 @@ router.post("/:id/messages", async (req, res) => {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+    // Send an immediate event before local model loading/inference so the
+    // client can show progress instead of an apparently frozen request.
+    res.write(`data: ${JSON.stringify({ status: "working" })}\n\n`);
 
     let savedContent = "";
     let lastToolError: string | null = null;
@@ -176,7 +185,9 @@ router.post("/:id/messages", async (req, res) => {
 
     const runTool = async (name: string, args: Record<string, unknown>) => {
       const toolId = `${Date.now()}-${name}`;
-      const summary = truncateSummary(args.summary, name);
+      const summary = name === "write_file" && String(args.path ?? "").trim()
+        ? `Writing ${String(args.path).replace(/^\/+/, "")}`
+        : truncateSummary(args.summary, name);
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ toolStart: { id: toolId, name, summary } })}\n\n`);
       }
@@ -212,12 +223,19 @@ router.post("/:id/messages", async (req, res) => {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
       } else if (wantsGithubImport(content) && isPersisted) {
-        await runTool("import_github_repo", {
+        const importResult = await runTool("import_github_repo", {
           path: "",
           summary: "Imported GitHub repo",
         });
-        await runTool("run_preview", { summary: "Preview ready" });
-        const msg = "\n\nPulled your connected GitHub repo into this app. Press **Run** to preview.";
+        const importedOutput = importResult.output as { hasIndexHtml?: boolean } | undefined;
+        if (!importResult.error && importedOutput?.hasIndexHtml) {
+          await runTool("run_preview", { summary: "Preview ready" });
+        }
+        const msg = importResult.error
+          ? `\n\nI couldn't pull that repository: ${importResult.error}`
+          : importedOutput?.hasIndexHtml
+            ? "\n\nPulled your connected GitHub repo into this app. Press **Run** to preview."
+            : "\n\nPulled the repository files into this app, but it does not contain an index.html entry point yet. Ask me to create the file needed to run it.";
         savedContent += msg;
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
@@ -236,7 +254,7 @@ router.post("/:id/messages", async (req, res) => {
         const localTools = toLocalToolDefinitions(forgeToolDeclarations);
 
         for (let turn = 0; turn < 12; turn++) {
-          const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 900 });
+          const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 900, fast: true });
           if (decision.kind === "final") {
             const text = decision.content.trim();
             if (text.startsWith("{") && text.includes("summary")) {
@@ -254,6 +272,25 @@ router.post("/:id/messages", async (req, res) => {
                 endedNaturally = true;
               } else {
                 const msg = "\n\nI couldn't finish building that cleanly. Try a simpler request like: make an app with the text hi on a blue background.";
+                savedContent += msg;
+                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                endedNaturally = true;
+              }
+            } else if (isToolProtocolLeak(text)) {
+              const fallback = trySimpleAppBuild(content);
+              if (fallback && isPersisted) {
+                await runTool("write_file", {
+                  path: fallback.path,
+                  content: fallback.content,
+                  summary: fallback.summary,
+                });
+                await runTool("run_preview", { summary: "Preview ready" });
+                const msg = "\n\nYour app is ready — press **Run** to open the preview.";
+                savedContent += msg;
+                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                endedNaturally = true;
+              } else {
+                const msg = "\n\nI’m using the requested tool now. Please continue with the specific file or app change you want.";
                 savedContent += msg;
                 if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
                 endedNaturally = true;

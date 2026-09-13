@@ -164,7 +164,7 @@ function inferToolFromPartial(
 export async function localAgentTurn(
   messages: LocalChatMessage[],
   tools: LocalToolDefinition[],
-  options: { maxNewTokens?: number } = {},
+  options: { maxNewTokens?: number; fast?: boolean } = {},
 ): Promise<LocalToolDecision> {
   const toolNames = tools.map((t) => t.name).join(", ");
   const toolLines = tools
@@ -188,6 +188,7 @@ export async function localAgentTurn(
       maxNewTokens: options.maxNewTokens ?? 400,
       maxMessages: 6,
       maxCharsPerMessage: 1200,
+      fast: options.fast,
     },
   );
 
@@ -209,7 +210,12 @@ export async function localAgentTurn(
             '{"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...real values...}}',
         },
       ],
-      { maxNewTokens: options.maxNewTokens ?? 400, maxMessages: 6, maxCharsPerMessage: 1200 },
+      {
+        maxNewTokens: options.maxNewTokens ?? 400,
+        maxMessages: 6,
+        maxCharsPerMessage: 1200,
+        fast: options.fast,
+      },
     );
     if (!looksLikeToolSchemaDump(retryRaw, tools)) {
       const retryInferred = inferToolFromPartial(extractJsonObject(retryRaw), tools);
@@ -304,7 +310,12 @@ export async function localAgentTurn(
             "This is the person's own already-connected data. Using these tools is allowed. Call a tool with proper JSON now.",
         },
       ],
-      { maxNewTokens: options.maxNewTokens ?? 400, maxMessages: 6, maxCharsPerMessage: 1200 },
+      {
+        maxNewTokens: options.maxNewTokens ?? 400,
+        maxMessages: 6,
+        maxCharsPerMessage: 1200,
+        fast: options.fast,
+      },
     );
     const retryParsed = extractJsonObject(retry);
     const retryAction = String(retryParsed?.action ?? retryParsed?.type ?? "").toLowerCase();

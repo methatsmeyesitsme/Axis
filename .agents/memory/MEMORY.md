@@ -2,3 +2,5 @@
 - [Forge schema application](forge-schema-application.md) — Forge tables must be applied through the correctly named workspace database package after schema changes.
 - [GitHub OAuth callback](github-oauth-callback.md) — keep GitHub’s exact callback URL stable; changing Axis preview URLs belong only in the signed-in return path.
 - [Placeholder component guard](placeholder-component-guard.md) — a committed placeholder can masquerade as a Vite export error; verify component source contents before changing imports.
+- [Workspace lockfile sync](workspace-lockfile-sync.md) — pnpm frozen installs require the lockfile to include the current workspace override map.
+- [Forge local model guard](forge-local-model-guard.md) — Forge tool turns should use the fast local model to avoid API OOM from loading the optional larger model.
