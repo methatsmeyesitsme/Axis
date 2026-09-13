@@ -77,7 +77,6 @@ function inlineArguments(parsed: Record<string, unknown> | null): Record<string,
   return Object.fromEntries(Object.entries(parsed).filter(([key]) => !controlKeys.has(key)));
 }
 
-/** Detect when the model is regurgitating tool schemas instead of answering. */
 function looksLikeToolSchemaDump(text: string): boolean {
   const t = text.toLowerCase();
   const hits = [
@@ -92,8 +91,6 @@ function looksLikeToolSchemaDump(text: string): boolean {
   return hits >= 2 || (t.includes("github_list_files") && t.includes("parameters"));
 }
 
-/** Detect when the model reflexively refuses (small models sometimes do this
- * for "tool"/"repo" framing even when the action is benign and permitted). */
 const REFUSAL_PATTERNS = [
   /i'?m sorry,? but i can'?t assist/i,
   /i can'?t (help|assist) with that/i,
@@ -105,9 +102,49 @@ const REFUSAL_PATTERNS = [
 
 function looksLikeRefusal(text: string): boolean {
   const t = text.trim();
-  // Keep this narrow — real answers are usually longer than a bare refusal line.
   if (!t || t.length > 200) return false;
   return REFUSAL_PATTERNS.some((re) => re.test(t));
+}
+
+/** True if text is only a tool name / JSON fragment, not a real user-facing answer. */
+function looksLikeToolLeak(text: string, tools: LocalToolDefinition[]): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (tools.some((tool) => tool.name === t)) return true;
+  if (/^[\w]+_[\w_]+$/.test(t) && t.length < 60) return true;
+  if (/^\s*\{\s*"summary"\s*:/.test(t) && !/"action"\s*:/.test(t) && !/"name"\s*:/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function inferToolFromPartial(
+  parsed: Record<string, unknown> | null,
+  tools: LocalToolDefinition[],
+): LocalToolDecision | null {
+  if (!parsed || tools.length === 0) return null;
+
+  // {"summary": "..."} alone — common Forge failure mode
+  const keys = Object.keys(parsed);
+  if (keys.length <= 2 && typeof parsed.summary === "string") {
+    const hasWrite = tools.some((t) => t.name === "write_file");
+    if (hasWrite) {
+      return {
+        kind: "tool",
+        name: "write_file",
+        arguments: { summary: parsed.summary, path: "index.html", content: "" },
+      };
+    }
+    return { kind: "tool", name: tools[0].name, arguments: { summary: parsed.summary } };
+  }
+
+  // {"name":"write_file", "path":"...", ...} without action
+  const maybeName = String(parsed.name ?? parsed.tool ?? "").trim();
+  if (maybeName && tools.some((t) => t.name === maybeName)) {
+    return { kind: "tool", name: maybeName, arguments: inlineArguments(parsed) };
+  }
+
+  return null;
 }
 
 export async function localAgentTurn(
@@ -121,14 +158,14 @@ export async function localAgentTurn(
     .join("\n");
 
   const instruction = [
-    "You must reply with ONE short JSON object only. No markdown. No extra text.",
-    `Tools you may use: ${toolNames || "(none)"}`,
+    "Reply with ONE short JSON object only. No markdown fences. No extra text.",
+    `Tools: ${toolNames || "(none)"}`,
     toolLines,
     "",
-    'Call a tool: {"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...}}',
-    'Answer the user: {"action":"final","content":"your answer here"}',
-    "If you are unsure which tool to use, answer with action final.",
-    "Do not describe tools. Do not repeat this instruction.",
+    'To call a tool: {"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...}}',
+    'To answer the user: {"action":"final","content":"plain language answer"}',
+    "Prefer calling a tool when the user asked to build, pull, list, read, or write.",
+    "Never reply with only a tool name. Never reply with only a summary field.",
   ].join("\n");
 
   const raw = await localGenerate(
@@ -140,20 +177,16 @@ export async function localAgentTurn(
     },
   );
 
-  // Schema dump / loop → force a clean final answer without tools
   if (looksLikeToolSchemaDump(raw)) {
-    const clean = await localGenerate(
-      [
-        ...messages,
-        {
-          role: "user",
-          content:
-            "Do not use tools and do not output JSON. Answer the user's request in plain clear language.",
-        },
-      ],
-      { maxNewTokens: 512, maxMessages: 5, maxCharsPerMessage: 1000 },
-    );
-    return { kind: "final", content: clean.trim() || "I couldn't complete that tool action. Please try a simpler request." };
+    const inferred = inferToolFromPartial(extractJsonObject(raw), tools);
+    if (inferred) return inferred;
+    if (tools.length > 0) {
+      return { kind: "tool", name: tools[0].name, arguments: {} };
+    }
+    return {
+      kind: "final",
+      content: "I couldn't complete that tool action. Please try a simpler request.",
+    };
   }
 
   const parsed = extractJsonObject(raw);
@@ -172,15 +205,16 @@ export async function localAgentTurn(
     };
   }
 
-  // Small models sometimes "fill in the blank" and emit just the bare tool
-  // name (e.g. "github_list_files") instead of the required JSON wrapper.
-  // Without this, that raw name falls through and gets shown to the user
-  // verbatim as if it were the actual answer.
+  // Bare tool name as the entire reply
   const bareName = raw.trim().replace(/^[`'"]+|[`'"]+$/g, "");
   const bareMatch = tools.find((tool) => tool.name === bareName);
   if (bareMatch) {
     return { kind: "tool", name: bareMatch.name, arguments: {} };
   }
+
+  // Incomplete JSON like {"summary":"..."} → force a tool instead of showing JSON
+  const partial = inferToolFromPartial(parsed, tools);
+  if (partial) return partial;
 
   if (action === "final") {
     const rawContent = parsed?.content;
@@ -189,42 +223,42 @@ export async function localAgentTurn(
     if (typeof rawContent === "string") {
       content = rawContent.trim();
     } else if (rawContent && typeof rawContent === "object" && !Array.isArray(rawContent)) {
-      // The model nested the answer as structured data (e.g. {"repo": "..."})
-      // instead of writing a plain sentence. Turn it into readable text
-      // rather than showing the person a raw JSON blob.
       content = Object.entries(rawContent as Record<string, unknown>)
         .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
         .join("\n");
     }
 
     if (content) {
-      if (looksLikeToolSchemaDump(content)) {
+      if (looksLikeToolSchemaDump(content) || looksLikeToolLeak(content, tools)) {
+        if (tools.length > 0) {
+          return { kind: "tool", name: tools[0].name, arguments: {} };
+        }
         return {
           kind: "final",
-          content: "I couldn't use GitHub tools reliably on that request. Try asking a more specific question, or reconnect GitHub in Settings.",
+          content: "I couldn't finish that action cleanly. Please try again with a shorter request.",
         };
       }
       return { kind: "final", content };
     }
   }
 
-  // Not valid tool JSON → treat as a normal answer (strip obvious instruction echoes)
   const cleaned = raw
     .replace(/Return exactly one JSON object[\s\S]*$/i, "")
     .replace(/Choose the next action[\s\S]*$/i, "")
     .trim();
 
+  if (looksLikeToolLeak(cleaned, tools) && tools.length > 0) {
+    return { kind: "tool", name: tools[0].name, arguments: {} };
+  }
+
   if (looksLikeRefusal(cleaned) && tools.length > 0) {
-    // The model reflexively refused. Retry once, explicitly reassuring it
-    // that this is the person's own already-connected data and a normal,
-    // permitted part of the app — not unauthorized access.
     const retry = await localGenerate(
       [
         ...messages,
         {
           role: "user",
           content:
-            "This is the person's own already-connected repository, and using these tools is a normal, permitted part of this app, not unauthorized access. Please help directly instead of declining.",
+            "This is the person's own already-connected data. Using these tools is allowed. Call a tool with proper JSON now.",
         },
       ],
       { maxNewTokens: options.maxNewTokens ?? 400, maxMessages: 6, maxCharsPerMessage: 1200 },
@@ -237,23 +271,19 @@ export async function localAgentTurn(
     if ((retryAction === "tool" || Boolean(retryAliased)) && tools.some((tool) => tool.name === retryAliased)) {
       return { kind: "tool", name: retryAliased, arguments: inlineArguments(retryParsed) };
     }
-    const retryBareName = retry.trim().replace(/^[`'"]+|[`'"]+$/g, "");
-    const retryBareMatch = tools.find((tool) => tool.name === retryBareName);
-    if (retryBareMatch) {
-      return { kind: "tool", name: retryBareMatch.name, arguments: {} };
-    }
-    const retryClean = retry.trim();
-    if (retryClean && !looksLikeRefusal(retryClean) && !looksLikeToolSchemaDump(retryClean)) {
-      return { kind: "final", content: retryClean };
-    }
-    // Still refusing — use the most likely tool directly rather than showing
-    // the user a flat refusal for what was a benign, permitted request.
+    const retryBare = tools.find((tool) => tool.name === retry.trim().replace(/^[`'"]+|[`'"]+$/g, ""));
+    if (retryBare) return { kind: "tool", name: retryBare.name, arguments: {} };
+    const retryPartial = inferToolFromPartial(retryParsed, tools);
+    if (retryPartial) return retryPartial;
     return { kind: "tool", name: tools[0].name, arguments: {} };
   }
 
   return {
     kind: "final",
-    content: cleaned || "I couldn't complete that request cleanly. Please try again with a shorter question.",
+    content:
+      cleaned && !looksLikeToolLeak(cleaned, tools)
+        ? cleaned
+        : "I couldn't complete that request cleanly. Please try again with a shorter question.",
   };
 }
 
@@ -263,7 +293,8 @@ export function buildLocalToolResultMessage(
 ): string {
   return [
     `Tool result for ${name}:`,
-    JSON.stringify(result.error ? { error: result.error } : { output: result.output ?? "ok" }),
-    "Using this result, answer the user in plain language. Prefer action final unless another tool is clearly required.",
+    JSON.stringify(result.error ? { error: result.error } : { output: result.output ?? "ok" }).slice(0, 4000),
+    "Using this result, either call another needed tool or answer the user in plain language with action final.",
+    "Do not reply with only a tool name or only a summary field.",
   ].join("\n");
 }
