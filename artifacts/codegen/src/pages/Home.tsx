@@ -9,7 +9,7 @@ import AuthModal from "@/components/AuthModal";
 import SettingsPanel from "@/components/SettingsPanel";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { LogIn, Menu } from "lucide-react";
+import { LogIn, Menu, Plus } from "lucide-react";
 
 type Tab = "codex" | "cortex" | "forge";
 
@@ -38,6 +38,25 @@ function MenuToggle({
       className={`flex items-center justify-center w-8 h-8 rounded-lg bg-card border shadow-sm hover:bg-muted ${className}`}
     >
       <Menu className="w-4 h-4" />
+    </button>
+  );
+}
+
+function NewChatButton({
+  onClick,
+  className = "",
+}: {
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="New chat"
+      className={`flex items-center justify-center w-8 h-8 rounded-lg bg-card border shadow-sm hover:bg-muted ${className}`}
+    >
+      <Plus className="w-4 h-4" />
     </button>
   );
 }
@@ -217,8 +236,9 @@ export default function Home() {
       {activeTab === "cortex" ? (
         <div className="h-full w-full flex flex-col min-w-0 relative">
           {sidebarCollapsed && (
-            <div className="absolute top-3 left-2 z-20">
+            <div className="absolute top-3 left-2 z-20 flex items-center gap-2">
               <MenuToggle onClick={toggleSidebar} />
+              <NewChatButton onClick={() => setActiveCortexConversationId(null)} />
             </div>
           )}
           {!isLoading && !user && (
@@ -248,8 +268,9 @@ export default function Home() {
           >
             <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
               {sidebarCollapsed && (
-                <div className="absolute top-3 left-2 z-20">
+                <div className="absolute top-3 left-2 z-20 flex items-center gap-2">
                   <MenuToggle onClick={toggleSidebar} />
+                  <NewChatButton onClick={() => setActiveConversationId(null)} />
                 </div>
               )}
               {!isLoading && !user && (
@@ -275,8 +296,9 @@ export default function Home() {
 
             <div style={{ width: "50%" }} className="h-full shrink-0 flex flex-col min-w-0 relative">
               {sidebarCollapsed && (
-                <div className="absolute top-3 left-2 z-20">
+                <div className="absolute top-3 left-2 z-20 flex items-center gap-2">
                   <MenuToggle onClick={toggleSidebar} />
+                  <NewChatButton onClick={() => setActiveForgeConversationId(null)} />
                 </div>
               )}
               {!isLoading && !user && (

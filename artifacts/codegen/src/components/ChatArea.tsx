@@ -602,7 +602,7 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
-      <div className="h-14 border-b flex items-center justify-between pl-14 pr-6 md:px-6 bg-card shrink-0">
+      <div className="h-14 border-b flex items-center justify-between pl-24 pr-6 md:px-6 bg-card shrink-0">
         <div className="flex flex-col">
           <span className="font-semibold text-sm">{isGuest ? "New Chat" : (conversation?.title ?? "Loading...")}</span>
           <span className="text-xs text-muted-foreground">{isGuest ? selectedLanguage : (conversation?.language ?? selectedLanguage)}</span>
