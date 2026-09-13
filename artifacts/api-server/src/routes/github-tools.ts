@@ -3,8 +3,13 @@ import { getUserGithubConnection, decryptToken } from "./github";
 
 const GITHUB_API = "https://api.github.com";
 
-function authHeaders(token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "Axis" };
+function authHeaders(token?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "Axis",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 export const githubToolDeclarations: FunctionDeclaration[] = [
@@ -45,6 +50,74 @@ export async function isGithubReady(userId: number): Promise<boolean> {
   return !!(conn && conn.selectedOwner && conn.selectedRepo);
 }
 
+/** List files from a public (or private with token) repo without requiring Settings connection. */
+export async function listGithubRepoPublic(
+  owner: string,
+  repo: string,
+  path = "",
+  branch = "main",
+  token?: string,
+): Promise<{ output?: unknown; error?: string }> {
+  try {
+    const cleanPath = path.replace(/^\/+/, "");
+    const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=${encodeURIComponent(branch)}`;
+    let res = await fetch(url, { headers: authHeaders(token) });
+    // Fallback to master if main 404s
+    if (!res.ok && branch === "main") {
+      const alt = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=master`;
+      res = await fetch(alt, { headers: authHeaders(token) });
+    }
+    if (!res.ok) return { error: `GitHub API error: ${res.status} ${res.statusText}` };
+    const data = (await res.json()) as unknown;
+    const items = Array.isArray(data) ? data : [data];
+    return {
+      output: items.map((i) => {
+        const entry = i as { name?: string; path?: string; type?: string };
+        return { name: entry.name, path: entry.path, type: entry.type };
+      }),
+    };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Read a file from a public (or private with token) repo. */
+export async function readGithubFilePublic(
+  owner: string,
+  repo: string,
+  path: string,
+  branch = "main",
+  token?: string,
+): Promise<{ output?: unknown; error?: string }> {
+  try {
+    const cleanPath = path.replace(/^\/+/, "");
+    if (!cleanPath) return { error: "path is required" };
+    const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=${encodeURIComponent(branch)}`;
+    let res = await fetch(url, { headers: authHeaders(token) });
+    if (!res.ok && branch === "main") {
+      const alt = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=master`;
+      res = await fetch(alt, { headers: authHeaders(token) });
+    }
+    if (!res.ok) return { error: `GitHub API error: ${res.status} ${res.statusText}` };
+    const data = (await res.json()) as { content?: string; encoding?: string; type?: string };
+    if (data.type === "dir") return { error: "That path is a directory, not a file" };
+    if (!data.content) return { error: "That path is not a readable file" };
+    return { output: Buffer.from(data.content, "base64").toString("utf8") };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function parseOwnerRepo(text: string): { owner: string; repo: string } | null {
+  const m = text.match(/\b([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})\/([A-Za-z0-9._-]{1,100})\b/);
+  if (!m) return null;
+  // Avoid matching things like text/plain
+  const owner = m[1];
+  const repo = m[2];
+  if (/^(text|application|image|audio|video)$/i.test(owner)) return null;
+  return { owner, repo };
+}
+
 export async function executeGithubTool(
   userId: number,
   name: string,
@@ -63,28 +136,10 @@ export async function executeGithubTool(
   try {
     switch (name) {
       case "github_list_files": {
-        const path = String(args.path ?? "").replace(/^\/+/, "");
-        const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(url, { headers: authHeaders(token) });
-        if (!res.ok) return { error: `GitHub API error: ${res.status} ${res.statusText}` };
-        const data = (await res.json()) as unknown;
-        const items = Array.isArray(data) ? data : [data];
-        return {
-          output: items.map((i) => {
-            const entry = i as { name?: string; path?: string; type?: string };
-            return { name: entry.name, path: entry.path, type: entry.type };
-          }),
-        };
+        return listGithubRepoPublic(owner, repo, String(args.path ?? ""), branch, token);
       }
       case "github_read_file": {
-        const path = String(args.path ?? "").replace(/^\/+/, "");
-        if (!path) return { error: "path is required" };
-        const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
-        const res = await fetch(url, { headers: authHeaders(token) });
-        if (!res.ok) return { error: `GitHub API error: ${res.status} ${res.statusText}` };
-        const data = (await res.json()) as { content?: string };
-        if (!data.content) return { error: "That path is not a readable file (it may be a directory or empty)" };
-        return { output: Buffer.from(data.content, "base64").toString("utf8") };
+        return readGithubFilePublic(owner, repo, String(args.path ?? ""), branch, token);
       }
       case "github_write_file": {
         const path = String(args.path ?? "").replace(/^\/+/, "");
@@ -92,8 +147,6 @@ export async function executeGithubTool(
         const commitMessage = String(args.commitMessage ?? "Update via Axis");
         if (!path) return { error: "path is required" };
 
-        // Updating an existing file requires its current sha; creating a new
-        // one must NOT include a sha, so look it up first (404 = new file).
         let sha: string | undefined;
         const existingRes = await fetch(
           `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`,
