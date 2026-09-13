@@ -6,8 +6,6 @@ import { signup, login, getSessionUser, destroySession } from "./forge-accounts"
 
 const router: IRouter = Router();
 
-// ── MIME map ─────────────────────────────────────────────────────────────────
-
 const MIME_MAP: Record<string, string> = {
   html: "text/html; charset=utf-8",
   css: "text/css",
@@ -28,11 +26,18 @@ function getMimeType(path: string): string {
   return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
-// Express 5 (path-to-regexp v6+) requires named wildcards; the matched
-// segments come back as an array under req.params.splat.
 function joinSplat(splat: unknown): string {
   if (Array.isArray(splat)) return splat.join("/");
   return typeof splat === "string" ? splat : "";
+}
+
+/** Ensure relative CSS/JS paths resolve under /api/forge/preview/:id/ */
+function injectBaseHref(html: string, baseHref: string): string {
+  if (/<base\s/i.test(html)) return html;
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}">`);
+  }
+  return `<!doctype html><html><head><base href="${baseHref}"></head><body>${html}</body></html>`;
 }
 
 async function isForgeApp(id: number): Promise<boolean> {
@@ -41,7 +46,7 @@ async function isForgeApp(id: number): Promise<boolean> {
   return !!conv && conv.source === "forge";
 }
 
-async function serveFile(id: number, path: string, res: Response): Promise<void> {
+async function serveFile(id: number, path: string, res: Response, baseHref?: string): Promise<void> {
   if (!(await isForgeApp(id))) {
     res.status(404).send("App not found");
     return;
@@ -68,7 +73,12 @@ async function serveFile(id: number, path: string, res: Response): Promise<void>
 
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", getMimeType(path));
-  res.send(file.content);
+  let body = file.content;
+  if (path === "index.html" || path.endsWith(".html")) {
+    const base = baseHref ?? `/api/forge/preview/${id}/`;
+    body = injectBaseHref(body, base);
+  }
+  res.send(body);
 }
 
 function extractBearerToken(header: string | undefined): string | undefined {
@@ -77,9 +87,6 @@ function extractBearerToken(header: string | undefined): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-// Built-in account endpoints, reserved under "_auth/" so they can't collide
-// with routes an app author defines with write_backend_handler. Handled here
-// directly rather than via the sandbox, since they touch real credentials.
 async function handleAuthRoute(
   appId: number,
   route: string,
@@ -118,24 +125,17 @@ async function handleAuthRoute(
   res.status(404).json({ error: "Unknown auth route" });
 }
 
-// ── Routes ───────────────────────────────────────────────────────────────────
+// Serve index for BOTH /:id and /:id/ — never redirect between them.
+// (Redirects + Replit/Safari slash normalization caused "too many redirects".)
+async function serveIndex(req: Request, res: Response): Promise<void> {
+  const id = Number(req.params.id);
+  const baseHref = `/api/forge/preview/${id}/`;
+  await serveFile(id, "index.html", res, baseHref);
+}
 
-// No trailing slash: redirect to one. A trailing slash keeps the app's own
-// relative fetch()/asset paths (e.g. "style.css", "api/todos") resolving
-// against this preview's base path instead of dropping the :id segment.
-router.get("/:id", (req, res) => {
-  const qsIndex = req.originalUrl.indexOf("?");
-  const qs = qsIndex >= 0 ? req.originalUrl.slice(qsIndex) : "";
-  res.redirect(302, `${req.baseUrl}${req.path}/${qs}`);
-});
+router.get("/:id", serveIndex);
+router.get("/:id/", serveIndex);
 
-router.get("/:id/", async (req, res) => {
-  await serveFile(Number(req.params.id), "index.html", res);
-});
-
-// Backend handlers defined via write_backend_handler are exposed relative to
-// the preview base path under "api/" — registered before the static
-// wildcard below so it takes precedence, for any HTTP method.
 router.all("/:id/api/*splat", async (req, res) => {
   const id = Number(req.params.id);
   if (!(await isForgeApp(id))) {
@@ -162,11 +162,10 @@ router.all("/:id/api/*splat", async (req, res) => {
   res.status(result.status).json(result.body);
 });
 
-// Static frontend files written via write_file.
 router.get("/:id/*splat", async (req, res) => {
   const id = Number(req.params.id);
   const path = joinSplat((req.params as Record<string, unknown>).splat) || "index.html";
-  await serveFile(id, path, res);
+  await serveFile(id, path, res, `/api/forge/preview/${id}/`);
 });
 
 export default router;
