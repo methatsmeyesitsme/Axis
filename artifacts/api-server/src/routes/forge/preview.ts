@@ -31,7 +31,6 @@ function joinSplat(splat: unknown): string {
   return typeof splat === "string" ? splat : "";
 }
 
-/** Ensure relative CSS/JS paths resolve under /api/forge/preview/:id/ */
 function injectBaseHref(html: string, baseHref: string): string {
   if (/<base\s/i.test(html)) return html;
   if (/<head[^>]*>/i.test(html)) {
@@ -59,10 +58,22 @@ async function serveFile(id: number, path: string, res: Response, baseHref?: str
 
   if (!file) {
     if (path === "index.html") {
+      const others = await db
+        .select({ path: forgeAppFiles.path })
+        .from(forgeAppFiles)
+        .where(eq(forgeAppFiles.appId, id));
+      const list =
+        others.length === 0
+          ? "<p>No files are stored for this app yet.</p>"
+          : "<p>Files stored:</p><ul>" +
+            others.map((o) => `<li><code>${o.path}</code></li>`).join("") +
+            "</ul>";
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
         "<!doctype html><html><body style=\"font-family:sans-serif;padding:2rem;color:#666\">" +
-          "<p>This app doesn't have an <code>index.html</code> yet — ask Forge to build one first.</p>" +
+          "<p>This app doesn't have an <code>index.html</code> yet.</p>" +
+          list +
+          "<p>Ask Forge again: <em>make an app that says hi</em></p>" +
           "</body></html>",
       );
       return;
@@ -125,8 +136,6 @@ async function handleAuthRoute(
   res.status(404).json({ error: "Unknown auth route" });
 }
 
-// Serve index for BOTH /:id and /:id/ — never redirect between them.
-// (Redirects + Replit/Safari slash normalization caused "too many redirects".)
 async function serveIndex(req: Request, res: Response): Promise<void> {
   const id = Number(req.params.id);
   const baseHref = `/api/forge/preview/${id}/`;
