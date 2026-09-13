@@ -15,10 +15,10 @@ const router: IRouter = Router();
 
 function escapeHtml(s: string): string {
   return s
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, """);
+    .replace(/&/g, "&" + "amp;")
+    .replace(/</g, "&" + "lt;")
+    .replace(/>/g, "&" + "gt;")
+    .replace(/"/g, "&" + "quot;");
 }
 
 /** Build a one-file app without asking the tiny model to invent tool JSON. */
@@ -27,7 +27,7 @@ function trySimpleAppBuild(userText: string): { path: string; content: string; s
   const wantsApp = /\b(make|build|create|write)\b/.test(t) && /\b(app|page|website|site|html)\b/.test(t);
   if (!wantsApp) return null;
 
-  const quoted = userText.match(/["“']([^"”']{1,80})["”']/);
+  const quoted = userText.match(/["\u201c']([^"\u201d']{1,80})["\u201d']/);
   const label = (quoted?.[1] ?? "hi").trim() || "hi";
   const bg =
     /blue/.test(t) ? "#2563eb"
