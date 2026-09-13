@@ -21,13 +21,25 @@ interface ParsedContent {
   files: Array<{ filename: string; b64: string; mimeType: string }>;
 }
 
+/** Never show bare tool names like github_list_files as the answer. */
+function sanitizeAssistantText(raw: string): string {
+  const t = raw.trim();
+  if (/^github_[\w]+$/.test(t)) {
+    return "Pulling from GitHub… if this stays stuck, open Settings and reconnect GitHub, then try again.";
+  }
+  if (/^[\w]+_[\w_]+$/.test(t) && t.length < 60 && !t.includes(" ")) {
+    return "Working on that…";
+  }
+  if (t.startsWith("{") && t.includes("summary") && t.length < 200) {
+    return "Building that for you…";
+  }
+  return raw;
+}
+
 function stripImagePromptTag(s: string): string {
-  // Strip complete [IMAGE_PROMPT...] or any text from [IMAGE_PROMPT onwards
   const idx = s.search(/\[IMAGE_PROMPT/i);
   if (idx >= 0) return s.slice(0, idx);
 
-  // Strip partial build-up at end of string ONLY if it's a prefix of "IMAGE_PROMPT"
-  // e.g. "[", "[I", "[IM", "[IMA", "[IMAGE_PROMPT" — but NOT "[TODO", "[LIST", etc.
   const partial = s.match(/\[([A-Z_]*)$/i);
   if (partial) {
     const prefix = partial[1].toUpperCase();
@@ -335,7 +347,6 @@ function CopyMessageButton({ text, align }: { text: string; align: "left" | "rig
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // Clipboard API can be unavailable (e.g. insecure context) — fail quietly.
       return;
     }
     setCopied(true);
@@ -362,7 +373,8 @@ export default function MessageBubble({
   streamingImages, streamingFiles, sources,
 }: MessageBubbleProps) {
   const isUser = role === "user";
-  const { text, images: parsedImages, files: parsedFiles } = parseMessageContent(content);
+  const safeContent = isUser ? content : sanitizeAssistantText(content);
+  const { text, images: parsedImages, files: parsedFiles } = parseMessageContent(safeContent);
 
   const allImages = parsedImages.length > 0 ? parsedImages : (streamingImages ?? []);
   const allFiles = parsedFiles.length > 0 ? parsedFiles : (streamingFiles ?? []);
