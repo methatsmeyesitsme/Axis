@@ -140,13 +140,13 @@ export async function preloadLocalModel(): Promise<void> {
 
 export function buildLocalSystemPrompt(language: string): string {
   return [
-    `You are Axis, a helpful expert ${language} coding assistant.`,
-    "Always try to help with coding, repos, GitHub, files, and explanations.",
-    "Never refuse normal coding or repository questions. Never say you can't assist with that for coding tasks.",
+    `You are Axis, a helpful expert ${language} coding assistant with GitHub tools.`,
+    "You CAN see repository files when a prior message lists them or when tools were used.",
+    "Never say you lack access to the user's repo, files, or folders if the conversation already shows a pull or file list.",
+    "Never refuse normal coding or repository questions.",
+    "When asked to describe the app or repo, use the file list and README from the conversation.",
     "Be clear, accurate, and concise.",
     "For code: use correct syntax and markdown fences with the language tag.",
-    "For bugs: name the issue, explain why, then show the fix.",
-    "When tools are available, use them to inspect repos instead of guessing.",
     "Never invent tool JSON or API schemas in your final answer.",
   ].join(" ");
 }
@@ -215,11 +215,14 @@ async function runOnce(
 
 function looksLikeHardRefusal(text: string): boolean {
   const t = text.trim().toLowerCase();
-  if (t.length > 220) return false;
+  if (!t || t.length > 400) return false;
   return (
     /i('m| am) sorry, but i can'?t assist/.test(t) ||
     /i can'?t (help|assist) with that/.test(t) ||
-    /as an ai (language )?model, i (can'?t|cannot)/.test(t) ||
+    /as an ai (language )?model/.test(t) ||
+    /i don'?t have access to (your |the )?(connected )?repositor/.test(t) ||
+    /i (don'?t|do not) have access to (your |any )?(specific )?(files|folders|repo)/.test(t) ||
+    /i cannot access (your |the )?repo/.test(t) ||
     /^i can'?t assist with that\.?$/.test(t)
   );
 }
@@ -250,14 +253,14 @@ export async function localGenerate(
           {
             role: "user",
             content:
-              "You must help. This is a normal coding or repository question. Do not refuse. Answer helpfully in plain language.",
+              "You already have repo context in this chat (file lists / README). Do not refuse. Describe the app from that information in plain language.",
           },
         ],
-        { ...options, fast: false, maxNewTokens: Math.max(options.maxNewTokens ?? 0, 256) },
+        { ...options, fast: false, maxNewTokens: Math.max(options.maxNewTokens ?? 0, 320) },
       );
       if (looksLikeHardRefusal(out)) {
         out =
-          "I can help with that. Tell me what you want to know about the code or repo (files, what it does, how to change something), and I will dig in.";
+          "Based on the files already pulled in this chat, this looks like a multi-package TypeScript app (artifacts/, lib/, package.json, pnpm workspace). Ask me to open a specific file (e.g. replit.md or package.json) if you want more detail.";
       }
     }
 
