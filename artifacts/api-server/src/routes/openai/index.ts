@@ -137,9 +137,7 @@ function formatGithubDescribeAnswer(
     parts.push("Here is what is at the repository root:");
   }
 
-  const dirs = items.filter((i) => i.type === "dir");
-  const files = items.filter((i) => i.type === "file" || !i.type);
-  if (dirs.length || files.length) {
+  if (items.length) {
     parts.push("");
     parts.push("**Root layout:**");
     for (const i of items.slice(0, 30)) {
@@ -166,10 +164,29 @@ function formatGithubDescribeAnswer(
 }
 
 function wantsGithubDescribe(text: string): boolean {
-  return (
-    /\b(describe|summary|summarize|overview|what is|what's|whats|tell me about|explain)\b/i.test(text) &&
-    /\b(repo|repository|app|project|codebase|connected)\b/i.test(text)
-  );
+  const t = text.trim();
+  if (/\b(describe|summary|summarize|overview|explain)\b/i.test(t) && /\b(repo|repository|app|project|codebase|connected|axis)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(what is|what\'s|whats|tell me about)\b/i.test(t) && /\b(repo|repository|app|project|this|it|axis)\b/i.test(t)) {
+    return true;
+  }
+  if (/^describe\b/i.test(t) && t.length < 80) return true;
+  return false;
+}
+
+/** Model often answers describe-repo with one fluff line — force tools instead. */
+function looksLikeWeakRepoAnswer(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return true;
+  if (t.length < 180) {
+    if (/i('m| am) (connected|using)/.test(t)) return true;
+    if (/as an ai/.test(t)) return true;
+    if (/don'?t have (access|the capability)/.test(t)) return true;
+    if (/web browser/.test(t)) return true;
+    if (/github repository of/.test(t)) return true;
+  }
+  return false;
 }
 
 const router: IRouter = Router();
@@ -341,7 +358,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
     const describeIntent = wantsGithubDescribe(content);
     const wantsGithubTool =
       describeIntent ||
-      /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is|connected repo)\b/i.test(content) ||
+      /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is|connected repo|connected repository)\b/i.test(content) ||
+      /\bdescribe\b/i.test(content) ||
       /\b[\w.-]+\/[\w.-]+\b/.test(content);
     const wantsWebSearch = /\b(search the web|look up online|current price|latest news|weather today)\b/i.test(content);
 
@@ -450,6 +468,40 @@ router.post("/conversations/:id/messages", async (req, res) => {
       });
       if (isToolLeak(reply)) {
         reply = "I couldn't answer that cleanly. Try asking again, or name a GitHub repo like owner/name.";
+        await streamText(res, reply);
+      }
+
+      const shouldForceGithub =
+        (wantsGithubDescribe(content) || /\b(repo|repository|connected|github)\b/i.test(content)) &&
+        looksLikeWeakRepoAnswer(reply) &&
+        !!userId;
+      if (shouldForceGithub) {
+        console.log("[openai] weak model answer for repo question — forcing GitHub describe");
+        const listId2 = `${Date.now()}-force-list`;
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: listId2, name: "github_list_files", summary: "Listing repo files" } })}\n\n`);
+        }
+        const userToken2 = await getUserGithubToken(userId);
+        let listed2: { output?: unknown; error?: string };
+        if (await isGithubReady(userId)) {
+          listed2 = await executeGithubTool(userId, "github_list_files", { path: "" });
+        } else {
+          listed2 = { error: userToken2 ? "Select a connected repo in Settings." : "Connect GitHub (PAT with repo scope) in Settings." };
+        }
+        if (!res.writableEnded) {
+          const summary = toolStatusSummary("github_list_files", {}, listed2.error ? "error" : "done");
+          res.write(`data: ${JSON.stringify(listed2.error ? { toolError: { id: listId2, summary, error: listed2.error } } : { toolDone: { id: listId2, summary } })}\n\n`);
+        }
+        const items2 = Array.isArray(listed2.output)
+          ? (listed2.output as Array<{ name?: string; path?: string; type?: string }>)
+          : [];
+        let readme2: string | null = null;
+        const doc2 = items2.find((i) => /readme|replit\.md/i.test(String(i.path ?? i.name ?? "")) && i.type !== "dir");
+        if (doc2?.path && !listed2.error) {
+          const read = await executeGithubTool(userId, "github_read_file", { path: doc2.path });
+          if (!read.error && typeof read.output === "string") readme2 = read.output;
+        }
+        reply = formatGithubDescribeAnswer("your connected repo", items2, readme2, listed2.error ?? null);
         await streamText(res, reply);
       }
     }
