@@ -47,10 +47,23 @@ export const githubToolDeclarations: FunctionDeclaration[] = [
 
 export async function isGithubReady(userId: number): Promise<boolean> {
   const conn = await getUserGithubConnection(userId);
-  return !!(conn && conn.selectedOwner && conn.selectedRepo);
+  // Ready if they have a token — selected repo is optional when the prompt names owner/repo
+  return !!(conn && conn.encryptedAccessToken);
 }
 
-/** List files from a public (or private with token) repo without requiring Settings connection. */
+/** Return the user's PAT string if connected (OAuth or pasted token). */
+export async function getUserGithubToken(userId: number | null | undefined): Promise<string | undefined> {
+  if (!userId) return undefined;
+  const conn = await getUserGithubConnection(userId);
+  if (!conn?.encryptedAccessToken) return undefined;
+  try {
+    return decryptToken(conn.encryptedAccessToken);
+  } catch {
+    return undefined;
+  }
+}
+
+/** List files from a public (or private with token) repo. */
 export async function listGithubRepoPublic(
   owner: string,
   repo: string,
@@ -62,12 +75,14 @@ export async function listGithubRepoPublic(
     const cleanPath = path.replace(/^\/+/, "");
     const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=${encodeURIComponent(branch)}`;
     let res = await fetch(url, { headers: authHeaders(token) });
-    // Fallback to master if main 404s
     if (!res.ok && branch === "main") {
       const alt = `${GITHUB_API}/repos/${owner}/${repo}/contents/${cleanPath}?ref=master`;
       res = await fetch(alt, { headers: authHeaders(token) });
     }
-    if (!res.ok) return { error: `GitHub API error: ${res.status} ${res.statusText}` };
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { error: `GitHub API error: ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}` };
+    }
     const data = (await res.json()) as unknown;
     const items = Array.isArray(data) ? data : [data];
     return {
@@ -111,7 +126,6 @@ export async function readGithubFilePublic(
 export function parseOwnerRepo(text: string): { owner: string; repo: string } | null {
   const m = text.match(/\b([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})\/([A-Za-z0-9._-]{1,100})\b/);
   if (!m) return null;
-  // Avoid matching things like text/plain
   const owner = m[1];
   const repo = m[2];
   if (/^(text|application|image|audio|video)$/i.test(owner)) return null;
@@ -124,14 +138,19 @@ export async function executeGithubTool(
   args: Record<string, unknown>,
 ): Promise<{ output?: unknown; error?: string }> {
   const conn = await getUserGithubConnection(userId);
-  if (!conn || !conn.selectedOwner || !conn.selectedRepo) {
-    return { error: "No GitHub repository is connected/selected. Ask the person to connect GitHub and pick a repo in Settings." };
+  if (!conn?.encryptedAccessToken) {
+    return { error: "No GitHub token connected. Add a Personal Access Token in Settings." };
   }
 
   const token = decryptToken(conn.encryptedAccessToken);
-  const owner = conn.selectedOwner;
-  const repo = conn.selectedRepo;
-  const branch = conn.selectedBranch ?? "main";
+  // Prefer explicit path args; fall back to selected repo in Settings
+  const owner = String(args.owner ?? conn.selectedOwner ?? "");
+  const repo = String(args.repo ?? conn.selectedRepo ?? "");
+  const branch = String(args.branch ?? conn.selectedBranch ?? "main");
+
+  if (!owner || !repo) {
+    return { error: "No repo selected. Name a repo like owner/name in your message, or pick one in Settings." };
+  }
 
   try {
     switch (name) {
