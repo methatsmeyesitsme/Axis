@@ -77,7 +77,7 @@ function inlineArguments(parsed: Record<string, unknown> | null): Record<string,
   return Object.fromEntries(Object.entries(parsed).filter(([key]) => !controlKeys.has(key)));
 }
 
-function looksLikeToolSchemaDump(text: string): boolean {
+function looksLikeToolSchemaDump(text: string, tools: LocalToolDefinition[] = []): boolean {
   const t = text.toLowerCase();
   const hits = [
     '"action": "final"',
@@ -88,7 +88,21 @@ function looksLikeToolSchemaDump(text: string): boolean {
     "available tools",
     '"type": "object"',
   ].filter((s) => t.includes(s.toLowerCase())).length;
-  return hits >= 2 || (t.includes("github_list_files") && t.includes("parameters"));
+  if (hits >= 2 || (t.includes("github_list_files") && t.includes("parameters"))) return true;
+
+  // Generic, tool-set-agnostic check: the model dumped an example call for
+  // every available tool instead of picking one (e.g. Forge's full tool
+  // list, or any other tool set — not just GitHub's). Detected by checking
+  // whether most of the top-level keys of the parsed JSON are real tool names.
+  if (tools.length >= 3) {
+    const parsed = extractJsonObject(text);
+    if (parsed) {
+      const keys = Object.keys(parsed);
+      const matches = keys.filter((k) => tools.some((tool) => tool.name === k)).length;
+      if (matches >= 3) return true;
+    }
+  }
+  return false;
 }
 
 const REFUSAL_PATTERNS = [
@@ -177,15 +191,44 @@ export async function localAgentTurn(
     },
   );
 
-  if (looksLikeToolSchemaDump(raw)) {
+  if (looksLikeToolSchemaDump(raw, tools)) {
     const inferred = inferToolFromPartial(extractJsonObject(raw), tools);
     if (inferred) return inferred;
-    if (tools.length > 0) {
-      return { kind: "tool", name: tools[0].name, arguments: {} };
+
+    // The model dumped an example call for every tool instead of picking
+    // one. Retry once with an explicit correction before giving up —
+    // defaulting straight to tools[0] with empty arguments (e.g. write_file
+    // with no content) would silently "succeed" while doing nothing useful.
+    const retryRaw = await localGenerate(
+      [
+        ...messages,
+        {
+          role: "user",
+          content:
+            "That listed every tool's example instead of calling one. Call exactly ONE tool now, with the real values needed for this specific request (not placeholders): " +
+            '{"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...real values...}}',
+        },
+      ],
+      { maxNewTokens: options.maxNewTokens ?? 400, maxMessages: 6, maxCharsPerMessage: 1200 },
+    );
+    if (!looksLikeToolSchemaDump(retryRaw, tools)) {
+      const retryInferred = inferToolFromPartial(extractJsonObject(retryRaw), tools);
+      if (retryInferred) return retryInferred;
+      const retryParsedDump = extractJsonObject(retryRaw);
+      const retryActionDump = String(retryParsedDump?.action ?? retryParsedDump?.type ?? "").toLowerCase();
+      const retryNameDump = String(retryParsedDump?.name ?? retryParsedDump?.tool ?? "").trim();
+      const retryAliasedDump = tools.some((tool) => tool.name === retryActionDump) ? retryActionDump : retryNameDump;
+      if (
+        (retryActionDump === "tool" || Boolean(retryAliasedDump)) &&
+        tools.some((tool) => tool.name === retryAliasedDump)
+      ) {
+        return { kind: "tool", name: retryAliasedDump, arguments: inlineArguments(retryParsedDump) };
+      }
     }
+
     return {
       kind: "final",
-      content: "I couldn't complete that tool action. Please try a simpler request.",
+      content: "I had trouble completing that — could you rephrase it as one specific request?",
     };
   }
 
@@ -229,7 +272,7 @@ export async function localAgentTurn(
     }
 
     if (content) {
-      if (looksLikeToolSchemaDump(content) || looksLikeToolLeak(content, tools)) {
+      if (looksLikeToolSchemaDump(content, tools) || looksLikeToolLeak(content, tools)) {
         if (tools.length > 0) {
           return { kind: "tool", name: tools[0].name, arguments: {} };
         }
