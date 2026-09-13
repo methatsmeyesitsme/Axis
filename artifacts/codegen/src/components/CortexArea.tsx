@@ -404,7 +404,7 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
   const showBubble = isStreaming || displayedContent.length > 0;
 
   const inputBar = (placeholder: string) => (
-    <div className="p-4 border-t bg-background shadow-sm shrink-0">
+    <div data-keyboard-composer className="p-4 border-t bg-background shadow-sm shrink-0">
       {!user && (
         <div className="max-w-4xl mx-auto mb-2">
           <button onClick={onOpenAuth} className="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors py-1.5">
