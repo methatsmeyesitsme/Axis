@@ -84,7 +84,7 @@ function FileDownloadCard({ filename, b64, mimeType }: { filename: string; b64: 
   );
 }
 
-function ImageBlock({ b64, mimeType, maxWidth = 480 }: { b64: string; mimeType: string; maxWidth?: number }) {
+function ImageBlock({ b64, mimeType, maxWidth = 240 }: { b64: string; mimeType: string; maxWidth?: number }) {
   const [copied, setCopied] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const dataUrl = `data:${mimeType};base64,${b64}`;
@@ -360,7 +360,7 @@ export default function MessageBubble({
         <div className="text-[14.5px]">
           {renderContent(text)}
           {allImages.map((img, i) => (
-            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} maxWidth={isUser ? 240 : 480} />
+            <ImageBlock key={i} b64={img.b64} mimeType={img.mimeType} maxWidth={isUser ? 240 : undefined} />
           ))}
           {isGeneratingImage && <CreatingImagePlaceholder />}
           {allFiles.map((f, i) => (
