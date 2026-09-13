@@ -3,8 +3,6 @@ import { db, conversations, messages, userMemories } from "@workspace/db";
 import {
   localGenerate,
   localGenerateStreaming,
-  localAgentTurn,
-  buildLocalToolResultMessage,
   buildLocalSystemPrompt,
   isShortRequest,
   isGreeting,
@@ -43,14 +41,63 @@ function toolStatusSummary(
   return words.filter(Boolean).slice(0, 5).join(" ");
 }
 
-const router: IRouter = Router();
-
-function getMimeType(ext: string): string {
-  const map: Record<string, string> = {
-    csv: "text/csv", txt: "text/plain", json: "application/json", html: "text/html", md: "text/markdown",
-  };
-  return map[ext.toLowerCase()] ?? "text/plain";
+/** True if the model dumped a tool name / JSON instead of a real answer. */
+function isToolLeak(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (/^github_[\w]+$/.test(t)) return true;
+  if (/^[\w]+_[\w_]+$/.test(t) && t.length < 60) return true;
+  if (t.startsWith("{") && (t.includes("\"summary\"") || t.includes("\"action\"") || t.includes("github_"))) return true;
+  return false;
 }
+
+function formatGithubPullAnswer(
+  ownerRepoHint: string,
+  items: Array<{ name?: string; path?: string; type?: string }>,
+  readmeText: string | null,
+  listError: string | null,
+): string {
+  if (listError) {
+    return `I tried to pull your connected GitHub repo but hit an error: ${listError}\n\nCheck Settings → GitHub (token + selected repo), then try again.`;
+  }
+
+  const files = items.filter((i) => i.type === "file" || !i.type);
+  const dirs = items.filter((i) => i.type === "dir");
+  const topNames = items
+    .map((i) => i.name || (i.path ? i.path.split("/").pop() : ""))
+    .filter(Boolean)
+    .slice(0, 40);
+
+  const lines: string[] = [];
+  lines.push(ownerRepoHint ? `Here's what I pulled from **${ownerRepoHint}**:` : "Here's what I pulled from your connected GitHub repo:");
+  lines.push("");
+
+  if (topNames.length === 0) {
+    lines.push("(No files found at the repo root.)");
+  } else {
+    lines.push("**Top-level items:**");
+    for (const name of topNames) {
+      const isDir = dirs.some((d) => d.name === name || d.path?.endsWith(name));
+      lines.push(`- ${name}${isDir ? "/" : ""}`);
+    }
+  }
+
+  if (readmeText && readmeText.trim()) {
+    const snippet = readmeText.trim().slice(0, 1200);
+    lines.push("");
+    lines.push("**From the README:**");
+    lines.push(snippet + (readmeText.trim().length > 1200 ? "…" : ""));
+  } else {
+    lines.push("");
+    lines.push("No README found at the root. Ask me to open a specific file (e.g. package.json or src/index.ts) if you want more detail.");
+  }
+
+  lines.push("");
+  lines.push(`Found ${files.length} file(s) and ${dirs.length} folder(s) at the root.`);
+  return lines.join("\n");
+}
+
+const router: IRouter = Router();
 
 async function loadMemories(userId: number): Promise<string> {
   const rows = await db.select().from(userMemories).where(eq(userMemories.userId, userId)).orderBy(desc(userMemories.createdAt)).limit(30);
@@ -71,6 +118,15 @@ async function generateTitle(userMessage: string): Promise<string> {
     if (candidate && candidate.length > 1 && candidate.length < 80) return candidate;
   } catch { /* ignore */ }
   return "New Chat";
+}
+
+async function streamText(res: import("express").Response, text: string): Promise<void> {
+  if (res.writableEnded) return;
+  for (let i = 0; i < text.length; i += 12) {
+    if (res.writableEnded) return;
+    res.write(`data: ${JSON.stringify({ content: text.slice(i, i + 12) })}\n\n`);
+    await new Promise((r) => setTimeout(r, 8));
+  }
 }
 
 router.get("/conversations", async (req, res) => {
@@ -164,6 +220,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
       memoryBlock ? `Known about this user:\n${memoryBlock.slice(0, 400)}` : "",
       planMode ? "PLAN MODE: help plan only." : "",
       "Never refuse normal coding or GitHub questions.",
+      "Never reply with only a tool name like github_list_files.",
     ].filter(Boolean).join("\n\n");
 
     const short = isShortRequest(content);
@@ -191,8 +248,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
       try {
         const { b64, mimeType } = await localGenerateImage(imgPrompt);
         reply = `Here's an image for: ${imgPrompt}`;
+        await streamText(res, reply);
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ content: reply })}\n\n`);
           res.write(`data: ${JSON.stringify({ imageData: { b64, mimeType } })}\n\n`);
           res.write(`data: ${JSON.stringify({ toolDone: { id: toolId, summary: "Image ready" } })}\n\n`);
         }
@@ -209,7 +266,9 @@ router.post("/conversations/:id/messages", async (req, res) => {
       /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is)\b/i.test(content) ||
       /\b[\w.-]+\/[\w.-]+\b/.test(content);
     const wantsWebSearch = /\b(search the web|look up online|current price|latest news|weather today)\b/i.test(content);
-    const localTools = [...(wantsGithubTool ? toLocalToolDefinitions(githubToolDeclarations) : [])];
+
+    // Keep tools list for detection only — we execute GitHub ourselves.
+    void toLocalToolDefinitions(githubToolDeclarations);
 
     if (wantsWebSearch) {
       const toolId = `${Date.now()}-web`;
@@ -225,55 +284,67 @@ router.post("/conversations/:id/messages", async (req, res) => {
       }
     }
 
-    if (localTools.length === 0) {
-      reply = await localGenerateStreaming(workingMessages, {
-        fast: short || greeting,
-        maxNewTokens: greeting ? 48 : short ? 96 : 900,
-        maxMessages: greeting ? 2 : short ? 3 : 6,
-        maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
-        onToken: (chunk) => { if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`); },
-      });
-    } else {
-      if (userId && (await isGithubReady(userId))) {
+    if (wantsGithubTool) {
+      // Deterministic pull — never let the tiny model invent tool names as the answer.
+      if (!userId) {
+        reply = "Log in and connect GitHub in Settings first, then ask me to pull the repo again.";
+        await streamText(res, reply);
+      } else if (!(await isGithubReady(userId))) {
+        reply = "No GitHub repository is connected yet. Open Settings, connect GitHub, pick a repo, then try again.";
+        await streamText(res, reply);
+      } else {
         const listId = `${Date.now()}-list`;
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: listId, name: "github_list_files", summary: "Listing repo files" } })}\n\n`);
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ toolStart: { id: listId, name: "github_list_files", summary: "Listing repo files" } })}\n\n`);
+        }
         const listed = await executeGithubTool(userId, "github_list_files", { path: "" });
         if (!res.writableEnded) {
           const summary = toolStatusSummary("github_list_files", {}, listed.error ? "error" : "done");
           res.write(`data: ${JSON.stringify(listed.error ? { toolError: { id: listId, summary, error: listed.error } } : { toolDone: { id: listId, summary } })}\n\n`);
         }
-        workingMessages.push({ role: "user", content: buildLocalToolResultMessage("github_list_files", listed) });
 
-        const items = Array.isArray(listed.output) ? (listed.output as Array<{ path?: string; name?: string; type?: string }>) : [];
+        const items = Array.isArray(listed.output)
+          ? (listed.output as Array<{ name?: string; path?: string; type?: string }>)
+          : [];
+
+        let readmeText: string | null = null;
         const readme = items.find((i) => /readme/i.test(String(i.path ?? i.name ?? "")) && i.type !== "dir");
-        if (readme?.path) {
+        if (readme?.path && !listed.error) {
           const readId = `${Date.now()}-readme`;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ toolStart: { id: readId, name: "github_read_file", summary: "Reading README" } })}\n\n`);
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ toolStart: { id: readId, name: "github_read_file", summary: "Reading README" } })}\n\n`);
+          }
           const read = await executeGithubTool(userId, "github_read_file", { path: readme.path });
           if (!res.writableEnded) {
             const summary = toolStatusSummary("github_read_file", { path: readme.path }, read.error ? "error" : "done");
             res.write(`data: ${JSON.stringify(read.error ? { toolError: { id: readId, summary, error: read.error } } : { toolDone: { id: readId, summary } })}\n\n`);
           }
-          workingMessages.push({ role: "user", content: buildLocalToolResultMessage("github_read_file", read) });
+          if (!read.error && typeof read.output === "string") readmeText = read.output;
         }
 
-        workingMessages.push({
-          role: "user",
-          content: "Using the tool results above, explain what this repository is in plain language. Do not output tool names or JSON.",
-        });
-      } else if (!userId) {
-        workingMessages.push({ role: "user", content: "User is not logged in. Tell them to log in and connect GitHub in Settings." });
-      } else {
-        workingMessages.push({ role: "user", content: "No GitHub repo connected. Tell them to connect GitHub and select a repo in Settings." });
+        const ownerRepoMatch = content.match(/\b([\w.-]+\/[\w.-]+)\b/);
+        const hint = ownerRepoMatch?.[1] ?? "your connected repo";
+        reply = formatGithubPullAnswer(hint, items, readmeText, listed.error ?? null);
+        await streamText(res, reply);
       }
-
+    } else {
+      // Normal chat — stream, then replace if the model leaked a tool name.
+      let streamed = "";
       reply = await localGenerateStreaming(workingMessages, {
-        maxNewTokens: 500, maxMessages: 8, maxCharsPerMessage: 1400,
-        onToken: (chunk) => { if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`); },
+        fast: short || greeting,
+        maxNewTokens: greeting ? 48 : short ? 96 : 900,
+        maxMessages: greeting ? 2 : short ? 3 : 6,
+        maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
+        onToken: (chunk) => {
+          streamed += chunk;
+          // Don't stream tool-name leaks live
+          if (isToolLeak(streamed) && streamed.length < 80) return;
+          if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+        },
       });
-      if (/^github_[\w]+$/.test(reply.trim()) || (reply.trim().startsWith("{") && reply.includes("summary"))) {
-        reply = "I pulled the file list from your connected GitHub repo. Ask me about a specific file or what the project does.";
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: reply })}\n\n`);
+      if (isToolLeak(reply)) {
+        reply = "I couldn't answer that cleanly. Try asking again in a shorter way, or ask me to pull a specific GitHub file.";
+        await streamText(res, reply);
       }
     }
 
