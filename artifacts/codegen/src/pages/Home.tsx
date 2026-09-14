@@ -338,7 +338,6 @@ export default function Home() {
         transition={{ type: "spring", stiffness: 420, damping: 36 }}
         className="fixed top-2 bottom-2 left-0 z-50 flex items-stretch pointer-events-none"
       >
-        {/* drop-shadow follows the rounded shape (rounded top/bottom, not square) */}
         <div
           className="pointer-events-auto h-full"
           style={{
@@ -390,7 +389,15 @@ export default function Home() {
       </motion.div>
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsPanel
+          onClose={() => setShowSettings(false)}
+          onOpenAuth={() => {
+            setShowSettings(false);
+            setShowAuth(true);
+          }}
+        />
+      )}
     </div>
   );
 }
