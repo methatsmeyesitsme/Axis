@@ -254,6 +254,68 @@ function isPreviewFile(path: string): boolean {
   return PREVIEW_EXTS.has(ext);
 }
 
+/** True if HTML looks like the old Forge "hi" / welcome placeholder, not a real app. */
+function isPlaceholderHtml(content: string): boolean {
+  const c = content.toLowerCase();
+  const stripped = c.replace(/\s+/g, " ");
+  if (stripped.includes(">hi<") || stripped.includes(">hello<") || stripped.includes(">welcome to my web app<")) {
+    if (content.length < 2500 && !/calendar|todo|counter|form|button|nav|grid|table/i.test(content)) return true;
+  }
+  if (/welcome to my web app/i.test(content) && content.length < 4000) return true;
+  return false;
+}
+
+/**
+ * Ensure root index.html exists.
+ * force=true (after GitHub import): always overwrite root with the best nested HTML when one exists.
+ * Otherwise: promote only if root is missing or is a placeholder "hi" page.
+ */
+async function ensureRootIndexHtml(
+  appId: number,
+  opts: { force?: boolean } = {},
+): Promise<{ ok: true; from?: string } | { ok: false; files: string[] }> {
+  const force = !!opts.force;
+  const [root] = await db
+    .select()
+    .from(forgeAppFiles)
+    .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
+
+  const all = await db.select().from(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
+  const rank = (p: string): number => {
+    const low = p.toLowerCase();
+    if (low === "public/index.html" || low === "src/index.html") return 1;
+    if (low.endsWith("/index.html") && /artifacts\/(mockup|axis-preview|codegen|preview)/i.test(low)) return 2;
+    if (low.endsWith("/index.html")) return 3;
+    if (low.endsWith(".html")) return 4;
+    return 9;
+  };
+  const candidates = all
+    .filter((f) => f.path !== "index.html" && (f.path.endsWith("/index.html") || f.path.endsWith(".html")))
+    .filter((f) => f.content?.trim() && !isPlaceholderHtml(f.content))
+    .sort((a, b) => rank(a.path) - rank(b.path) || a.path.length - b.path.length);
+  const best = candidates[0];
+
+  const rootOk = !!root?.content?.trim() && !isPlaceholderHtml(root.content);
+
+  if (rootOk && !force) return { ok: true };
+  if (rootOk && force && !best) return { ok: true };
+
+  if (!best?.content?.trim()) {
+    if (rootOk) return { ok: true };
+    return { ok: false, files: all.map((f) => f.path).slice(0, 30) };
+  }
+
+  if (root) {
+    await db
+      .update(forgeAppFiles)
+      .set({ content: best.content, updatedAt: new Date() })
+      .where(eq(forgeAppFiles.id, root.id));
+  } else {
+    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: best.content });
+  }
+  return { ok: true, from: best.path };
+}
+
 async function importGithubIntoForge(
   appId: number,
   userId: number | null,
@@ -263,6 +325,9 @@ async function importGithubIntoForge(
   if (!(await isGithubReady(userId))) {
     return { error: "No GitHub repository is connected/selected. Connect GitHub and pick a repo in Settings." };
   }
+
+  // Wipe previous app files so a leftover "hi" index.html cannot block the real import
+  await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
   const skipDir = (p: string) =>
     /(?:^|\/)(node_modules|\.git|\.agents|dist|build|\.next|coverage|\.turbo|\.cache|vendor)(?:\/|$)/i.test(p);
@@ -309,29 +374,19 @@ async function importGithubIntoForge(
 
   let imported = 0;
   const names: string[] = [];
-  const contents = new Map<string, string>();
 
   for (const path of filePaths.slice(0, 50)) {
     const read = await executeGithubTool(userId, "github_read_file", { path });
     if (read.error || typeof read.output !== "string") continue;
     const content = read.output as string;
     if (content.length > 400_000) continue;
-    contents.set(path, content);
-    const [existing] = await db
-      .select()
-      .from(forgeAppFiles)
-      .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
-    if (existing) {
-      await db.update(forgeAppFiles).set({ content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
-    } else {
-      await db.insert(forgeAppFiles).values({ appId, path, content });
-    }
+    await db.insert(forgeAppFiles).values({ appId, path, content });
     imported++;
     names.push(path);
   }
 
-  // Always ensure a root index.html exists after import
-  const ensured = await ensureRootIndexHtml(appId);
+  // Always force-promote best nested HTML → root index.html after import
+  const ensured = await ensureRootIndexHtml(appId, { force: true });
   const hasIndex = ensured.ok;
   const promoted = ensured.ok ? ensured.from ?? null : null;
   if (hasIndex && promoted && !names.includes("index.html")) names.unshift("index.html");
@@ -349,42 +404,6 @@ async function importGithubIntoForge(
         : "Imported files, but no HTML entry. Ask Forge to create index.html for the app you want.",
     },
   };
-}
-
-/** If root index.html is missing, copy the best nested HTML into place. */
-async function ensureRootIndexHtml(appId: number): Promise<{ ok: true; from?: string } | { ok: false; files: string[] }> {
-  const [root] = await db
-    .select()
-    .from(forgeAppFiles)
-    .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
-  if (root?.content?.trim()) return { ok: true };
-
-  const all = await db.select().from(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
-  const rank = (p: string): number => {
-    const low = p.toLowerCase();
-    if (low === "public/index.html" || low === "src/index.html") return 1;
-    if (low.endsWith("/index.html") && /artifacts\/(mockup|axis-preview|codegen|preview)/i.test(low)) return 2;
-    if (low.endsWith("/index.html")) return 3;
-    if (low.endsWith(".html")) return 4;
-    return 9;
-  };
-  const candidates = all
-    .filter((f) => f.path !== "index.html" && (f.path.endsWith("/index.html") || f.path.endsWith(".html")))
-    .sort((a, b) => rank(a.path) - rank(b.path) || a.path.length - b.path.length);
-  const best = candidates[0];
-  if (!best?.content?.trim()) {
-    return { ok: false, files: all.map((f) => f.path).slice(0, 24) };
-  }
-  const [existing] = await db
-    .select()
-    .from(forgeAppFiles)
-    .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
-  if (existing) {
-    await db.update(forgeAppFiles).set({ content: best.content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
-  } else {
-    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: best.content });
-  }
-  return { ok: true, from: best.path };
 }
 
 async function executeForgeToolOnce(
@@ -497,7 +516,15 @@ async function executeForgeToolOnce(
         const filterObj = rawArgs.filter ? (safeParseJson(rawArgs.filter) as Record<string, unknown>) : null;
         const rows =
           filterObj && Object.keys(filterObj).length > 0
-            ? await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`))
+            ? await db
+                .select()
+                .from(forgeAppTableRows)
+                .where(
+                  and(
+                    eq(forgeAppTableRows.tableId, t.id),
+                    sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+                  ),
+                )
             : await db.select().from(forgeAppTableRows).where(eq(forgeAppTableRows.tableId, t.id));
         return { output: rows.map((r) => ({ id: r.id, ...(r.data as Record<string, unknown>) })) };
       }
@@ -507,9 +534,20 @@ async function executeForgeToolOnce(
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
         const patch = safeParseJson(rawArgs.data) as Record<string, unknown>;
-        const rows = await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
+        const rows = await db
+          .select()
+          .from(forgeAppTableRows)
+          .where(
+            and(
+              eq(forgeAppTableRows.tableId, t.id),
+              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+            ),
+          );
         for (const row of rows) {
-          await db.update(forgeAppTableRows).set({ data: { ...(row.data as Record<string, unknown>), ...patch }, updatedAt: new Date() }).where(eq(forgeAppTableRows.id, row.id));
+          await db
+            .update(forgeAppTableRows)
+            .set({ data: { ...(row.data as Record<string, unknown>), ...patch }, updatedAt: new Date() })
+            .where(eq(forgeAppTableRows.id, row.id));
         }
         return { output: `Updated ${rows.length} row(s)` };
       }
@@ -518,7 +556,15 @@ async function executeForgeToolOnce(
         const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
-        const rows = await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
+        const rows = await db
+          .select()
+          .from(forgeAppTableRows)
+          .where(
+            and(
+              eq(forgeAppTableRows.tableId, t.id),
+              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+            ),
+          );
         for (const row of rows) {
           await db.delete(forgeAppTableRows).where(eq(forgeAppTableRows.id, row.id));
         }
@@ -536,7 +582,7 @@ async function executeForgeToolOnce(
         return { output: "Accounts enabled for this app" };
       }
       case "run_preview": {
-        const ensured = await ensureRootIndexHtml(appId);
+        const ensured = await ensureRootIndexHtml(appId, { force: true });
         if (!ensured.ok) {
           const list = ensured.files.join(", ") || "(none)";
           return { error: `No index.html yet — files present: ${list}` };
