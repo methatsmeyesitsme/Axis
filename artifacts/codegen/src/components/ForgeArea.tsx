@@ -10,7 +10,7 @@ import {
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Hammer, Square, LogIn, Play, ChevronDown } from "lucide-react";
+import { Send, Hammer, Square, LogIn, Play, ChevronDown, X, Compass } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { AIThinkingRow } from "./AIStatusLabel";
@@ -38,6 +38,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [optimisticBaseline, setOptimisticBaseline] = useState(0);
   const [toolSteps, setToolSteps] = useState<ToolStep[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
 
   const [guestMessages, setGuestMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
 
@@ -106,14 +107,11 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     if (!isStreaming && !isThinking && isNearBottom()) scrollToBottom();
   }, [serverMessages, isStreaming, isThinking, scrollToBottom, isNearBottom]);
 
-  // Typewriter interval — same proven pattern as Codex/Cortex, including the fix
-  // that guarantees this runs even when a request fails before streaming starts.
   useEffect(() => {
     if (!isStreaming) return;
 
     displayTimerRef.current = setInterval(() => {
       if (charQueueRef.current.length > 0) {
-        // Keep the typewriter feel without making long responses crawl.
         const batch = charQueueRef.current.slice(0, 6);
         charQueueRef.current = charQueueRef.current.slice(batch.length);
         setDisplayedContent((prev) => prev + batch);
@@ -182,10 +180,6 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         onConversationCreated(targetId);
         if (user) queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
       } catch {
-        // Creating the app itself failed (e.g. a transient network/server
-        // error) — previously this was unhandled, crashing the whole send
-        // with no feedback. Roll back the optimistic UI and let the person
-        // retry instead.
         setOptimisticUserMessage(null);
         setInput(fullContent);
         charQueueRef.current = "Couldn't start a new app just now — please try again.";
@@ -313,9 +307,16 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
+  const previewUrl = canPreview ? `/api/forge/preview/${conversationId}/` : null;
+
   const handleRunPreview = () => {
-    if (!canPreview) return;
-    window.open(`/api/forge/preview/${conversationId}/`, "_blank", "noopener,noreferrer");
+    if (!previewUrl) return;
+    setShowPreview(true);
+  };
+
+  const handleOpenInBrowser = () => {
+    if (!previewUrl) return;
+    window.open(previewUrl, "_blank", "noopener,noreferrer");
   };
 
   const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
@@ -363,12 +364,10 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             </Button>
           </div>
         </div>
-        {/* Run button — opens a live preview of the app's generated files/backend
-            handlers in a new tab, served by the api-server's /forge/preview route. */}
         <button
           onClick={handleRunPreview}
           disabled={!canPreview}
-          title={canPreview ? "Open a live preview of this app in a new tab" : "Log in and start building to preview your app"}
+          title={canPreview ? "Open a live preview of this app" : "Log in and start building to preview your app"}
           className={`w-full mt-2 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
             canPreview
               ? "bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
@@ -465,6 +464,38 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
       </div>
 
       {composer("Describe the app you want to build...")}
+
+      {showPreview && previewUrl && (
+        <div className="fixed inset-0 z-[100] bg-background flex flex-col">
+          <div className="h-12 shrink-0 flex items-center justify-between px-3 border-b bg-card">
+            <button
+              type="button"
+              onClick={() => setShowPreview(false)}
+              className="flex items-center justify-center w-10 h-10 rounded-full hover:bg-muted transition-colors"
+              title="Close preview"
+              aria-label="Close preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <span className="text-sm font-medium text-muted-foreground truncate px-2">Preview</span>
+            <button
+              type="button"
+              onClick={handleOpenInBrowser}
+              className="flex items-center justify-center w-10 h-10 rounded-full hover:bg-muted transition-colors"
+              title="Open in browser"
+              aria-label="Open in browser"
+            >
+              <Compass className="w-5 h-5" />
+            </button>
+          </div>
+          <iframe
+            src={previewUrl}
+            title="App preview"
+            className="flex-1 w-full border-0 bg-white"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+          />
+        </div>
+      )}
     </div>
   );
 }
