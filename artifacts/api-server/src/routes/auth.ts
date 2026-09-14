@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, users, conversations } from "@workspace/db";
+import { db, users } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
@@ -13,6 +13,18 @@ function isValidPassword(pw: string) {
 }
 function isValidUsername(u: string) {
   return typeof u === "string" && /^[a-zA-Z0-9_]{2,32}$/.test(u);
+}
+
+function saveSession(req: import("express").Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.save((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+function regenerateSession(req: import("express").Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => (err ? reject(err) : resolve()));
+  });
 }
 
 router.post("/register/start", async (req, res) => {
@@ -36,6 +48,7 @@ router.post("/register/start", async (req, res) => {
   const hash = await bcrypt.hash(password, 10);
   req.session.pendingEmail = email.toLowerCase();
   req.session.pendingPasswordHash = hash;
+  await saveSession(req);
   res.json({ ok: true });
 });
 
@@ -64,9 +77,9 @@ router.post("/register/complete", async (req, res) => {
     passwordHash: req.session.pendingPasswordHash,
   }).returning();
 
-  req.session.pendingEmail = undefined;
-  req.session.pendingPasswordHash = undefined;
+  await regenerateSession(req);
   req.session.userId = newUser.id;
+  await saveSession(req);
 
   res.json({ id: newUser.id, email: newUser.email, username: newUser.username });
 });
@@ -105,16 +118,19 @@ router.post("/login", async (req, res) => {
     return;
   }
 
+  // Fresh session id + explicit save so the cookie is set before the response ends
+  // (fixes "Log in first" when connecting GitHub right after login on Safari/Replit).
+  await regenerateSession(req);
   req.session.userId = user.id;
+  await saveSession(req);
+
   res.json({ id: user.id, email: user.email, username: user.username });
 });
 
 router.post("/logout", async (req, res) => {
-  const userId = req.session.userId;
-  if (userId) {
-    await db.delete(conversations).where(eq(conversations.userId, userId));
-  }
+  // Only end the session — do NOT delete the user's chats/apps.
   req.session.destroy(() => {
+    res.clearCookie("axis.sid", { path: "/" });
     res.json({ ok: true });
   });
 });
@@ -127,6 +143,7 @@ router.get("/me", async (req, res) => {
   const [user] = await db.select().from(users).where(eq(users.id, req.session.userId));
   if (!user) {
     req.session.userId = undefined;
+    await saveSession(req).catch(() => undefined);
     res.json({ user: null });
     return;
   }
