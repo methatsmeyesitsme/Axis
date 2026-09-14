@@ -21,12 +21,6 @@ function saveSession(req: import("express").Request): Promise<void> {
   });
 }
 
-function regenerateSession(req: import("express").Request): Promise<void> {
-  return new Promise((resolve, reject) => {
-    req.session.regenerate((err) => (err ? reject(err) : resolve()));
-  });
-}
-
 router.post("/register/start", async (req, res) => {
   const { email, password } = req.body as { email: string; password: string };
 
@@ -77,7 +71,8 @@ router.post("/register/complete", async (req, res) => {
     passwordHash: req.session.pendingPasswordHash,
   }).returning();
 
-  await regenerateSession(req);
+  delete req.session.pendingEmail;
+  delete req.session.pendingPasswordHash;
   req.session.userId = newUser.id;
   await saveSession(req);
 
@@ -118,9 +113,9 @@ router.post("/login", async (req, res) => {
     return;
   }
 
-  // Fresh session id + explicit save so the cookie is set before the response ends
-  // (fixes "Log in first" when connecting GitHub right after login on Safari/Replit).
-  await regenerateSession(req);
+  // Set userId on the current session and save — do NOT regenerate here.
+  // Regenerating races with other requests and was clearing the login when
+  // the user connected a GitHub PAT in Settings.
   req.session.userId = user.id;
   await saveSession(req);
 
@@ -128,9 +123,8 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/logout", async (req, res) => {
-  // Only end the session — do NOT delete the user's chats/apps.
   req.session.destroy(() => {
-    res.clearCookie("axis.sid", { path: "/" });
+    res.clearCookie("connect.sid", { path: "/" });
     res.json({ ok: true });
   });
 });
