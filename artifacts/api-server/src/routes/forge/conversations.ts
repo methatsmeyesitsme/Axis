@@ -48,24 +48,39 @@ function trySimpleAppBuild(userText: string): { path: string; content: string; s
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>App</title>
   <style>
-    html, body { height: 100%; margin: 0; }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
     body {
       min-height: 100%;
+      min-height: 100dvh;
+      width: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
+      text-align: center;
       background: ${bg};
       color: ${fg};
       font-family: system-ui, -apple-system, sans-serif;
       font-size: clamp(2rem, 8vw, 4rem);
       font-weight: 600;
+      overflow: hidden;
+    }
+    .label {
+      width: 100%;
+      padding: 1rem;
+      text-align: center;
     }
   </style>
 </head>
-<body>${escapeHtml(label)}</body>
+<body><div class="label">${escapeHtml(label)}</div></body>
 </html>
 `;
   return { path: "index.html", content: html, summary: "Created index.html" };
