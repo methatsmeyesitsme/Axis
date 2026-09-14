@@ -80,8 +80,21 @@ for(let d=1;d<=n;d++){const e=document.createElement("div");e.className="day"+(d
   return { path: "index.html", content: html, summary: "Created month calendar" };
 }
 
+/** Fast path: promote existing HTML / make preview ready — never call the slow model. */
+function wantsEnsurePreview(userText: string): boolean {
+  const t = userText.toLowerCase().trim();
+  if (/\bindex\.html\b/.test(t)) return true;
+  if (/\b(make|get|set)\b.{0,20}\bpreview\b/.test(t)) return true;
+  if (/\bpreview\b.{0,20}\b(ready|work|open|run)\b/.test(t)) return true;
+  if (/\b(add|write|create)\b.{0,30}\b(index|html|entry)\b/.test(t)) return true;
+  if (/^add index/i.test(t) || /^write index/i.test(t)) return true;
+  return false;
+}
+
 function wantsGithubImport(userText: string): boolean {
   const t = userText.toLowerCase().trim();
+  // Don't treat "write index.html" as a repo pull
+  if (wantsEnsurePreview(userText) && !/\b(repo|github|pull from)\b/.test(t)) return false;
   if (/\b(import_github_repo|github import)\b/.test(t)) return true;
   if (/\b(my (connected )?repo|connected repo|connected repository)\b/.test(t)) return true;
   if (/\b(pull|clone|import|load|fetch)\b/.test(t) && /\b(repo|repository|github)\b/.test(t)) return true;
@@ -304,6 +317,21 @@ ${isPersisted ? "" : "User is not logged in — ask them to log in before buildi
           if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
           endedNaturally = true;
         }
+      } else if (wantsEnsurePreview(content) && isPersisted) {
+        // Fast: promote nested HTML to root index.html (no local model)
+        const previewResult = await runTool("run_preview", { summary: "Preview ready" });
+        if (previewResult.error) {
+          const msg =
+            `\n\n${previewResult.error}\n\nIf you just pulled a repo, say **pull from my connected repo** once more after the server rebuilds, or describe a simple app to build.`;
+          savedContent += msg;
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        } else {
+          const out = typeof previewResult.output === "string" ? previewResult.output : "Preview ready";
+          const msg = `\n\n${out}. Press **Run** to open it.`;
+          savedContent += msg;
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        }
+        endedNaturally = true;
       } else if (!isPersisted) {
         const msg = "\n\nLog in first so Forge can save your app files.";
         savedContent += msg;
@@ -315,7 +343,7 @@ ${isPersisted ? "" : "User is not logged in — ask them to log in before buildi
             role: "system",
             content: `${systemPrompt}\n\nUse the JSON tool protocol. Build the real app the user asked for with write_file (full index.html) + run_preview. Never substitute a generic hi page. Use earlier messages in this chat as context for what the user wants.`,
           },
-          ...history.slice(-12).map((m): LocalChatMessage => ({
+          ...history.slice(-6).map((m): LocalChatMessage => ({
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.content.slice(0, 2500),
           })),
@@ -323,10 +351,10 @@ ${isPersisted ? "" : "User is not logged in — ask them to log in before buildi
         ];
         const localTools = toLocalToolDefinitions(forgeToolDeclarations);
 
-        for (let turn = 0; turn < 8; turn++) {
+        for (let turn = 0; turn < 4; turn++) {
           let decision;
           try {
-            decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 900, fast: true });
+            decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 500, fast: true });
           } catch (modelErr) {
             const detail = modelErr instanceof Error ? modelErr.message : String(modelErr);
             const fallback = tryMonthCalendarBuild(content) ?? trySimpleAppBuild(content);
