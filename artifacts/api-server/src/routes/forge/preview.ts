@@ -31,12 +31,39 @@ function joinSplat(splat: unknown): string {
   return typeof splat === "string" ? splat : "";
 }
 
-function injectBaseHref(html: string, baseHref: string): string {
-  if (/<base\s/i.test(html)) return html;
-  if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}">`);
+/** Inject base href, viewport, and full-viewport body styles so previews fill the screen. */
+function injectPreviewPolish(html: string, baseHref: string): string {
+  let out = html;
+
+  if (!/<base\s/i.test(out)) {
+    if (/<head[^>]*>/i.test(out)) {
+      out = out.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}">`);
+    } else {
+      out = `<!doctype html><html><head><base href="${baseHref}"></head><body>${out}</body></html>`;
+    }
   }
-  return `<!doctype html><html><head><base href="${baseHref}"></head><body>${html}</body></html>`;
+
+  if (!/<meta[^>]+name=["']viewport["']/i.test(out)) {
+    out = out.replace(
+      /<head([^>]*)>/i,
+      `<head$1><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">`,
+    );
+  }
+
+  // Ensure the page can fill a phone / iframe viewport
+  const fillCss =
+    `<style id="forge-preview-fill">` +
+    `html,body{height:100%;min-height:100%;min-height:100dvh;margin:0;}` +
+    `</style>`;
+  if (!/id=["']forge-preview-fill["']/.test(out)) {
+    if (/<\/head>/i.test(out)) {
+      out = out.replace(/<\/head>/i, `${fillCss}</head>`);
+    } else if (/<head[^>]*>/i.test(out)) {
+      out = out.replace(/<head([^>]*)>/i, `<head$1>${fillCss}`);
+    }
+  }
+
+  return out;
 }
 
 async function isForgeApp(id: number): Promise<boolean> {
@@ -70,7 +97,8 @@ async function serveFile(id: number, path: string, res: Response, baseHref?: str
             "</ul>";
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
-        "<!doctype html><html><body style=\"font-family:sans-serif;padding:2rem;color:#666\">" +
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>" +
+          "<body style=\"font-family:sans-serif;padding:2rem;color:#666;min-height:100dvh;margin:0\">" +
           "<p>This app doesn't have an <code>index.html</code> yet.</p>" +
           list +
           "<p>Ask Forge again: <em>make an app that says hi</em></p>" +
@@ -87,7 +115,7 @@ async function serveFile(id: number, path: string, res: Response, baseHref?: str
   let body = file.content;
   if (path === "index.html" || path.endsWith(".html")) {
     const base = baseHref ?? `/api/forge/preview/${id}/`;
-    body = injectBaseHref(body, base);
+    body = injectPreviewPolish(body, base);
   }
   res.send(body);
 }
