@@ -3,16 +3,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
-// Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+const SESSION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS "session" (
+  "sid" varchar NOT NULL PRIMARY KEY,
+  "sess" json NOT NULL,
+  "expire" timestamp(6) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+`;
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
+  await mkdir(distDir, { recursive: true });
 
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
@@ -22,11 +32,6 @@ async function buildAll() {
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
-    // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
-    // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
-    // Examples of unbundleable packages:
-    // - uses native modules and loads them dynamically (e.g. sharp)
-    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
       "sharp",
@@ -99,13 +104,14 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // Must stay external: it reads table.sql next to its package files.
+      // Bundling rewrites __dirname to dist/ and login fails with ENOENT.
+      "connect-pg-simple",
     ],
     sourcemap: "linked",
     plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],
-    // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
@@ -117,6 +123,19 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // Belt-and-suspenders: always have table.sql next to the bundle.
+  await writeFile(path.join(distDir, "table.sql"), SESSION_TABLE_SQL, "utf8");
+
+  // Prefer the package's official SQL if present.
+  try {
+    const pkgSql = require.resolve("connect-pg-simple/table.sql");
+    if (existsSync(pkgSql)) {
+      await copyFile(pkgSql, path.join(distDir, "table.sql"));
+    }
+  } catch {
+    // keep the written fallback
+  }
 }
 
 buildAll().catch((err) => {
