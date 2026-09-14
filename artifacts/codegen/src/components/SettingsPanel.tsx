@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { X, Sun, Moon, LogOut, User, Mail, Lock, Github, Loader2, Unlink } from "lucide-react";
+import { X, Sun, Moon, LogOut, LogIn, User, Mail, Lock, Github, Loader2, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface GithubStatus {
@@ -23,6 +23,7 @@ interface GithubRepo {
 
 interface SettingsPanelProps {
   onClose: () => void;
+  onOpenAuth?: () => void;
 }
 
 function getStoredTheme(): "light" | "dark" {
@@ -39,7 +40,7 @@ function applyTheme(theme: "light" | "dark") {
   localStorage.setItem("theme", theme);
 }
 
-export default function SettingsPanel({ onClose }: SettingsPanelProps) {
+export default function SettingsPanel({ onClose, onOpenAuth }: SettingsPanelProps) {
   const { user, logout } = useAuth();
   const queryClient = useQueryClient();
   const [theme, setTheme] = useState<"light" | "dark">(getStoredTheme);
@@ -89,7 +90,6 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const msg = String(data.error || "Failed to connect token");
-        // Do NOT call refetch()/logout here — that was wiping the UI login state.
         if (/log in first/i.test(msg)) {
           setPatError("Server session missing. Close Settings, sign out, sign in once, then connect again.");
         } else {
@@ -163,6 +163,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   };
 
+  const handleLogin = () => {
+    onClose();
+    onOpenAuth?.();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 relative max-h-[90vh] overflow-y-auto">
@@ -174,6 +179,23 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
         </button>
 
         <h2 className="text-xl font-semibold text-foreground mb-6">Settings</h2>
+
+        {!user && (
+          <div className="mb-6">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              Account
+            </h3>
+            <div className="space-y-3 bg-muted/40 rounded-xl p-4">
+              <p className="text-sm text-muted-foreground">
+                Sign in to save apps, connect GitHub, and keep your chats.
+              </p>
+              <Button className="w-full" onClick={handleLogin}>
+                <LogIn className="w-4 h-4 mr-2" />
+                Log in
+              </Button>
+            </div>
+          </div>
+        )}
 
         {user && (
           <div className="mb-6">
