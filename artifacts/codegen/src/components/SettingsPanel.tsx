@@ -40,7 +40,7 @@ function applyTheme(theme: "light" | "dark") {
 }
 
 export default function SettingsPanel({ onClose }: SettingsPanelProps) {
-  const { user, logout } = useAuth();
+  const { user, logout, refetch } = useAuth();
   const queryClient = useQueryClient();
   const [theme, setTheme] = useState<"light" | "dark">(getStoredTheme);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -80,6 +80,15 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     setGithubBusy(true);
     setPatError(null);
     try {
+      // Confirm server still has our session before connecting
+      const meRes = await fetch("/api/auth/me", { credentials: "include" });
+      const meData = await meRes.json().catch(() => ({}));
+      if (!meData?.user) {
+        await refetch();
+        setPatError("Session expired — sign out, sign in again, then connect GitHub.");
+        return;
+      }
+
       const res = await fetch("/api/github/connect-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -88,7 +97,13 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setPatError(data.error || "Failed to connect token");
+        const msg = String(data.error || "Failed to connect token");
+        if (/log in first/i.test(msg)) {
+          await refetch();
+          setPatError("Session expired — sign out, sign in again, then connect GitHub.");
+        } else {
+          setPatError(msg);
+        }
         return;
       }
       setPatInput("");
