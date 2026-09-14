@@ -1,4 +1,4 @@
-import app, { ensureSessionTable } from "./app";
+import { createApp, ensureSessionTable } from "./app";
 import { logger } from "./lib/logger";
 
 const rawPort = process.env["PORT"];
@@ -22,6 +22,8 @@ async function main() {
     logger.error({ err }, "Failed to ensure session table");
     process.exit(1);
   }
+
+  const app = createApp();
 
   app.listen(port, (err?: Error) => {
     if (err) {
