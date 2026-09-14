@@ -3,6 +3,9 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { pool } from "@workspace/db";
@@ -11,7 +14,6 @@ const PgSession = connectPgSimple(session);
 
 const app: Express = express();
 
-// Replit / reverse proxies terminate TLS — required for secure cookies to stick.
 app.set("trust proxy", 1);
 
 app.use(
@@ -42,13 +44,30 @@ const isHttps =
   !!process.env.REPLIT_DEV_DOMAIN ||
   !!process.env.REPL_SLUG;
 
+const SESSION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS "session" (
+  "sid" varchar NOT NULL PRIMARY KEY,
+  "sess" json NOT NULL,
+  "expire" timestamp(6) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+`;
+
 /**
- * connect-pg-simple's createTableIfMissing reads table.sql from disk relative
- * to the package. After esbuild bundles into dist/, that path becomes
- * artifacts/api-server/dist/table.sql and login fails with ENOENT.
- * Create the table ourselves instead.
+ * Bundled builds rewrite __dirname to dist/, so connect-pg-simple may look for
+ * dist/table.sql. Ensure that file exists, and create the table via SQL too.
  */
 export async function ensureSessionTable(): Promise<void> {
+  try {
+    const distDir = path.dirname(fileURLToPath(import.meta.url));
+    const sqlPath = path.join(distDir, "table.sql");
+    if (!fs.existsSync(sqlPath)) {
+      fs.writeFileSync(sqlPath, SESSION_TABLE_SQL, "utf8");
+      logger.info({ sqlPath }, "Wrote missing session table.sql");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Could not write dist/table.sql (non-fatal)");
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
       "sid" varchar NOT NULL PRIMARY KEY,
@@ -74,7 +93,7 @@ app.use(
     proxy: true,
     rolling: true,
     cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      maxAge: 30 * 24 * 60 * 60 * 1000,
       httpOnly: true,
       sameSite: "lax",
       secure: isHttps,
