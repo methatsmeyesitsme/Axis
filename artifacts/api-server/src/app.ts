@@ -45,14 +45,14 @@ const isHttps =
 app.use(
   session({
     store: new PgSession({ pool, tableName: "session", createTableIfMissing: true }),
-    name: "axis.sid",
+    // Keep default cookie name (connect.sid) — renaming it logged people out on deploy.
     secret: process.env["SESSION_SECRET"] ?? "fallback-dev-secret",
     resave: false,
     saveUninitialized: false,
     proxy: true,
     rolling: true,
     cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days — stay logged in across restarts
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       httpOnly: true,
       sameSite: "lax",
       secure: isHttps,
