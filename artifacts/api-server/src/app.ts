@@ -42,10 +42,32 @@ const isHttps =
   !!process.env.REPLIT_DEV_DOMAIN ||
   !!process.env.REPL_SLUG;
 
+/**
+ * connect-pg-simple's createTableIfMissing reads table.sql from disk relative
+ * to the package. After esbuild bundles into dist/, that path becomes
+ * artifacts/api-server/dist/table.sql and login fails with ENOENT.
+ * Create the table ourselves instead.
+ */
+export async function ensureSessionTable(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL PRIMARY KEY,
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
+  `);
+}
+
 app.use(
   session({
-    store: new PgSession({ pool, tableName: "session", createTableIfMissing: true }),
-    // Keep default cookie name (connect.sid) — renaming it logged people out on deploy.
+    store: new PgSession({
+      pool,
+      tableName: "session",
+      createTableIfMissing: false,
+    }),
     secret: process.env["SESSION_SECRET"] ?? "fallback-dev-secret",
     resave: false,
     saveUninitialized: false,
