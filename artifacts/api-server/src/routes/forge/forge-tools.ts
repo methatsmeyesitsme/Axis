@@ -254,7 +254,6 @@ function isPreviewFile(path: string): boolean {
   return PREVIEW_EXTS.has(ext);
 }
 
-/** True if HTML looks like the old Forge "hi" / welcome placeholder, not a real app. */
 function isPlaceholderHtml(content: string): boolean {
   const c = content.toLowerCase();
   const stripped = c.replace(/\s+/g, " ");
@@ -265,11 +264,6 @@ function isPlaceholderHtml(content: string): boolean {
   return false;
 }
 
-/**
- * Ensure root index.html exists.
- * force=true (after GitHub import): always overwrite root with the best nested HTML when one exists.
- * Otherwise: promote only if root is missing or is a placeholder "hi" page.
- */
 async function ensureRootIndexHtml(
   appId: number,
   opts: { force?: boolean } = {},
@@ -284,7 +278,10 @@ async function ensureRootIndexHtml(
   const rank = (p: string): number => {
     const low = p.toLowerCase();
     if (low === "public/index.html" || low === "src/index.html") return 1;
-    if (low.endsWith("/index.html") && /artifacts\/(mockup|axis-preview|codegen|preview)/i.test(low)) return 2;
+    if (low.endsWith("/index.html") && /artifacts\/(tidy-toters|mockup-sandbox|axis-preview|codegen|preview)/i.test(low)) {
+      if (/tidy-toters/.test(low)) return 1;
+      return 2;
+    }
     if (low.endsWith("/index.html")) return 3;
     if (low.endsWith(".html")) return 4;
     return 9;
@@ -326,7 +323,6 @@ async function importGithubIntoForge(
     return { error: "No GitHub repository is connected/selected. Connect GitHub and pick a repo in Settings." };
   }
 
-  // Wipe previous app files so a leftover "hi" index.html cannot block the real import
   await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
   const skipDir = (p: string) =>
@@ -363,7 +359,10 @@ async function importGithubIntoForge(
     const low = p.toLowerCase();
     if (low === "index.html") return 0;
     if (low === "public/index.html" || low === "src/index.html") return 1;
-    if (low.endsWith("/index.html") && /artifacts\/(mockup|axis-preview|codegen|preview)/i.test(low)) return 2;
+    if (low.endsWith("/index.html") && /artifacts\/(tidy-toters|mockup-sandbox|axis-preview|codegen|preview)/i.test(low)) {
+      if (/tidy-toters/.test(low)) return 1;
+      return 2;
+    }
     if (low.endsWith("/index.html")) return 3;
     if (low.endsWith(".html")) return 4;
     if (/\.(css|js|mjs)$/i.test(low)) return 5;
@@ -385,7 +384,6 @@ async function importGithubIntoForge(
     names.push(path);
   }
 
-  // Always force-promote best nested HTML → root index.html after import
   const ensured = await ensureRootIndexHtml(appId, { force: true });
   const hasIndex = ensured.ok;
   const promoted = ensured.ok ? ensured.from ?? null : null;
@@ -425,10 +423,7 @@ async function executeForgeToolOnce(
           .from(forgeAppFiles)
           .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, path)));
         if (existing) {
-          await db
-            .update(forgeAppFiles)
-            .set({ content, updatedAt: new Date() })
-            .where(eq(forgeAppFiles.id, existing.id));
+          await db.update(forgeAppFiles).set({ content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
         } else {
           await db.insert(forgeAppFiles).values({ appId, path, content });
         }
@@ -516,15 +511,7 @@ async function executeForgeToolOnce(
         const filterObj = rawArgs.filter ? (safeParseJson(rawArgs.filter) as Record<string, unknown>) : null;
         const rows =
           filterObj && Object.keys(filterObj).length > 0
-            ? await db
-                .select()
-                .from(forgeAppTableRows)
-                .where(
-                  and(
-                    eq(forgeAppTableRows.tableId, t.id),
-                    sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
-                  ),
-                )
+            ? await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`))
             : await db.select().from(forgeAppTableRows).where(eq(forgeAppTableRows.tableId, t.id));
         return { output: rows.map((r) => ({ id: r.id, ...(r.data as Record<string, unknown>) })) };
       }
@@ -534,20 +521,9 @@ async function executeForgeToolOnce(
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
         const patch = safeParseJson(rawArgs.data) as Record<string, unknown>;
-        const rows = await db
-          .select()
-          .from(forgeAppTableRows)
-          .where(
-            and(
-              eq(forgeAppTableRows.tableId, t.id),
-              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
-            ),
-          );
+        const rows = await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
         for (const row of rows) {
-          await db
-            .update(forgeAppTableRows)
-            .set({ data: { ...(row.data as Record<string, unknown>), ...patch }, updatedAt: new Date() })
-            .where(eq(forgeAppTableRows.id, row.id));
+          await db.update(forgeAppTableRows).set({ data: { ...(row.data as Record<string, unknown>), ...patch }, updatedAt: new Date() }).where(eq(forgeAppTableRows.id, row.id));
         }
         return { output: `Updated ${rows.length} row(s)` };
       }
@@ -556,15 +532,7 @@ async function executeForgeToolOnce(
         const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
-        const rows = await db
-          .select()
-          .from(forgeAppTableRows)
-          .where(
-            and(
-              eq(forgeAppTableRows.tableId, t.id),
-              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
-            ),
-          );
+        const rows = await db.select().from(forgeAppTableRows).where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
         for (const row of rows) {
           await db.delete(forgeAppTableRows).where(eq(forgeAppTableRows.id, row.id));
         }
