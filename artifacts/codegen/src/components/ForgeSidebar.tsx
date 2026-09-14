@@ -152,7 +152,7 @@ export default function ForgeSidebar({
 
   const [renameDialog, setRenameDialog] = useState<{ id: number; title: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [deleteDialog, setDeleteDialog] = useState<{ id: number } | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ id: number; step: 1 | 2 } | null>(null);
 
   const openRename = (id: number, title: string) => {
     setRenameValue(title);
@@ -171,10 +171,14 @@ export default function ForgeSidebar({
     setRenameDialog(null);
   };
 
-  const openDelete = (id: number) => setDeleteDialog({ id });
+  const openDelete = (id: number) => setDeleteDialog({ id, step: 1 });
 
   const confirmDelete = () => {
     if (!deleteDialog) return;
+    if (deleteDialog.step === 1) {
+      setDeleteDialog({ id: deleteDialog.id, step: 2 });
+      return;
+    }
     const { id } = deleteDialog;
     deleteForgeMutation.mutate({ id }, {
       onSuccess: () => {
@@ -250,7 +254,6 @@ export default function ForgeSidebar({
         </div>
       </div>
 
-      {/* Rename Dialog */}
       <Dialog open={!!renameDialog} onOpenChange={(open) => { if (!open) setRenameDialog(null); }}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -271,22 +274,28 @@ export default function ForgeSidebar({
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteDialog} onOpenChange={(open) => { if (!open) setDeleteDialog(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this app?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteDialog?.step === 2 ? "Are you absolutely sure?" : "Delete this app?"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the app, its conversation, and all its data. This action cannot be undone.
+              {deleteDialog?.step === 2
+                ? "This is the final confirmation. The app, its files, and all chat history will be permanently deleted."
+                : "This will permanently delete the app, its conversation, and all its data. This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setDeleteDialog(null)}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={confirmDelete}
+              onClick={(e) => {
+                e.preventDefault();
+                confirmDelete();
+              }}
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
             >
-              Delete
+              {deleteDialog?.step === 2 ? "Yes, delete forever" : "Continue"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
