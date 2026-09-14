@@ -11,6 +11,9 @@ const PgSession = connectPgSimple(session);
 
 const app: Express = express();
 
+// Replit / reverse proxies terminate TLS — required for secure cookies to stick.
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,
@@ -34,27 +37,32 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
+const isHttps =
+  process.env.NODE_ENV === "production" ||
+  !!process.env.REPLIT_DEV_DOMAIN ||
+  !!process.env.REPL_SLUG;
+
 app.use(
   session({
     store: new PgSession({ pool, tableName: "session", createTableIfMissing: true }),
+    name: "axis.sid",
     secret: process.env["SESSION_SECRET"] ?? "fallback-dev-secret",
     resave: false,
     saveUninitialized: false,
+    proxy: true,
+    rolling: true,
     cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days — stay logged in across restarts
       httpOnly: true,
       sameSite: "lax",
+      secure: isHttps,
+      path: "/",
     },
   }),
 );
 
 app.use("/api", router);
 
-// Without this, an uncaught exception anywhere in a route (e.g. a transient
-// DB error) falls through to Express's default handler, which returns an
-// HTML error page. Clients calling res.json() on that get a confusing
-// SyntaxError ("...did not match the expected pattern" on WebKit) instead
-// of a real error message. This guarantees every response is valid JSON.
 const jsonErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   if (res.headersSent) {
     next(err);
