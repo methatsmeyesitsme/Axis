@@ -50,10 +50,9 @@ function injectPreviewPolish(html: string, baseHref: string): string {
     );
   }
 
-  // Ensure the page can fill a phone / iframe viewport
   const fillCss =
     `<style id="forge-preview-fill">` +
-    `html,body{height:100%;min-height:100%;min-height:100dvh;margin:0;}` +
+    `html,body{width:100%;height:100%;min-height:100%;min-height:100dvh;margin:0;padding:0;}` +
     `</style>`;
   if (!/id=["']forge-preview-fill["']/.test(out)) {
     if (/<\/head>/i.test(out)) {
