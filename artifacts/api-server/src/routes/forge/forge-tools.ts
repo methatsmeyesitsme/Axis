@@ -198,7 +198,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   {
     name: "run_preview",
     description:
-      "Check whether the app is ready to preview (i.e. an index.html exists) and confirm its live preview is available. The user can open it with the Run button in the UI.",
+      "Ensure the app has a root index.html (promoting a nested one if needed) and confirm the live preview is available via the Run button.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
   },
 ];
@@ -311,7 +311,7 @@ async function importGithubIntoForge(
   const names: string[] = [];
   const contents = new Map<string, string>();
 
-  for (const path of filePaths.slice(0, 40)) {
+  for (const path of filePaths.slice(0, 50)) {
     const read = await executeGithubTool(userId, "github_read_file", { path });
     if (read.error || typeof read.output !== "string") continue;
     const content = read.output as string;
@@ -330,29 +330,11 @@ async function importGithubIntoForge(
     names.push(path);
   }
 
-  let hasIndex = names.some((p) => p === "index.html");
-  let promoted: string | null = null;
-  if (!hasIndex) {
-    const candidates = names
-      .filter((p) => p.endsWith("/index.html") || p.endsWith(".html"))
-      .sort((a, b) => rank(a) - rank(b));
-    const best = candidates[0];
-    if (best && contents.has(best)) {
-      const content = contents.get(best)!;
-      const [existing] = await db
-        .select()
-        .from(forgeAppFiles)
-        .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
-      if (existing) {
-        await db.update(forgeAppFiles).set({ content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
-      } else {
-        await db.insert(forgeAppFiles).values({ appId, path: "index.html", content });
-      }
-      hasIndex = true;
-      promoted = best;
-      if (!names.includes("index.html")) names.unshift("index.html");
-    }
-  }
+  // Always ensure a root index.html exists after import
+  const ensured = await ensureRootIndexHtml(appId);
+  const hasIndex = ensured.ok;
+  const promoted = ensured.ok ? ensured.from ?? null : null;
+  if (hasIndex && promoted && !names.includes("index.html")) names.unshift("index.html");
 
   return {
     output: {
@@ -367,6 +349,42 @@ async function importGithubIntoForge(
         : "Imported files, but no HTML entry. Ask Forge to create index.html for the app you want.",
     },
   };
+}
+
+/** If root index.html is missing, copy the best nested HTML into place. */
+async function ensureRootIndexHtml(appId: number): Promise<{ ok: true; from?: string } | { ok: false; files: string[] }> {
+  const [root] = await db
+    .select()
+    .from(forgeAppFiles)
+    .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
+  if (root?.content?.trim()) return { ok: true };
+
+  const all = await db.select().from(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
+  const rank = (p: string): number => {
+    const low = p.toLowerCase();
+    if (low === "public/index.html" || low === "src/index.html") return 1;
+    if (low.endsWith("/index.html") && /artifacts\/(mockup|axis-preview|codegen|preview)/i.test(low)) return 2;
+    if (low.endsWith("/index.html")) return 3;
+    if (low.endsWith(".html")) return 4;
+    return 9;
+  };
+  const candidates = all
+    .filter((f) => f.path !== "index.html" && (f.path.endsWith("/index.html") || f.path.endsWith(".html")))
+    .sort((a, b) => rank(a.path) - rank(b.path) || a.path.length - b.path.length);
+  const best = candidates[0];
+  if (!best?.content?.trim()) {
+    return { ok: false, files: all.map((f) => f.path).slice(0, 24) };
+  }
+  const [existing] = await db
+    .select()
+    .from(forgeAppFiles)
+    .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
+  if (existing) {
+    await db.update(forgeAppFiles).set({ content: best.content, updatedAt: new Date() }).where(eq(forgeAppFiles.id, existing.id));
+  } else {
+    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: best.content });
+  }
+  return { ok: true, from: best.path };
 }
 
 async function executeForgeToolOnce(
@@ -518,16 +536,16 @@ async function executeForgeToolOnce(
         return { output: "Accounts enabled for this app" };
       }
       case "run_preview": {
-        const [indexFile] = await db
-          .select()
-          .from(forgeAppFiles)
-          .where(and(eq(forgeAppFiles.appId, appId), eq(forgeAppFiles.path, "index.html")));
-        if (!indexFile) {
-          const others = await db.select({ path: forgeAppFiles.path }).from(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
-          const list = others.map((o) => o.path).slice(0, 12).join(", ") || "(none)";
+        const ensured = await ensureRootIndexHtml(appId);
+        if (!ensured.ok) {
+          const list = ensured.files.join(", ") || "(none)";
           return { error: `No index.html yet — files present: ${list}` };
         }
-        return { output: "Preview ready" };
+        return {
+          output: ensured.from
+            ? `Preview ready (promoted ${ensured.from} → index.html)`
+            : "Preview ready",
+        };
       }
       default:
         return { error: `Unknown tool: ${name}` };
