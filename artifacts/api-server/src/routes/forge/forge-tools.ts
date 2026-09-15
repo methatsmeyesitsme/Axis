@@ -35,14 +35,11 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   {
     name: "import_github_repo",
     description:
-      "Pull files from the user's connected GitHub repository into this Forge app so they can be previewed with the Run button. Copies text/web files (html, css, js, json, md, svg, txt). Prefer paths that include index.html when possible.",
+      "Pull files from the user's connected GitHub repository into this Forge app so they can be previewed with the Run button.",
     parametersJsonSchema: {
       type: "object",
       properties: {
-        path: {
-          type: "string",
-          description: "Optional subdirectory in the repo to import (e.g. 'docs' or 'public'). Leave empty for the whole repo root.",
-        },
+        path: { type: "string", description: "Optional subdirectory in the repo to import." },
         ...summaryProp,
       },
       required: ["summary"],
@@ -90,8 +87,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "create_table",
-    description:
-      "Define a structured data table for the app. This is idempotent: inspect existing tables first, and if the table already exists, keep using it instead of trying to recreate it.",
+    description: "Define a structured data table for the app.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -111,7 +107,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "table_list",
-    description: "List the structured tables already defined for this app before creating or migrating one.",
+    description: "List the structured tables already defined for this app.",
     parametersJsonSchema: {
       type: "object",
       properties: { ...summaryProp },
@@ -133,12 +129,12 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "table_select",
-    description: "Read rows from one of the app's tables, optionally filtered.",
+    description: "Read rows from one of the app's tables.",
     parametersJsonSchema: {
       type: "object",
       properties: {
         table: { type: "string" },
-        filter: { type: "string", description: "Optional JSON-encoded object of exact-match filters" },
+        filter: { type: "string", description: "Optional JSON-encoded exact-match filters" },
         ...summaryProp,
       },
       required: ["table", "summary"],
@@ -146,13 +142,13 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "table_update",
-    description: "Update rows matching a filter in one of the app's tables.",
+    description: "Update rows matching a filter.",
     parametersJsonSchema: {
       type: "object",
       properties: {
         table: { type: "string" },
-        filter: { type: "string", description: "JSON-encoded object of exact-match filters" },
-        data: { type: "string", description: "JSON-encoded object of column values to set" },
+        filter: { type: "string" },
+        data: { type: "string" },
         ...summaryProp,
       },
       required: ["table", "filter", "data", "summary"],
@@ -160,12 +156,12 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "table_delete",
-    description: "Delete rows matching a filter in one of the app's tables.",
+    description: "Delete rows matching a filter.",
     parametersJsonSchema: {
       type: "object",
       properties: {
         table: { type: "string" },
-        filter: { type: "string", description: "JSON-encoded object of exact-match filters" },
+        filter: { type: "string" },
         ...summaryProp,
       },
       required: ["table", "filter", "summary"],
@@ -173,18 +169,13 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "write_backend_handler",
-    description:
-      "Define real, executable backend logic for a route (e.g. POST /checkout). The code runs server-side in a sandbox with access to `req` (method, route, query, body) and `db` (get/set/delete/list, insert/select/update/deleteRows). It must `return { status, body }`.",
+    description: "Define executable backend logic for a route.",
     parametersJsonSchema: {
       type: "object",
       properties: {
-        method: { type: "string", description: "HTTP method, e.g. GET, POST, PUT, DELETE" },
-        route: { type: "string", description: "Route path, e.g. /checkout or /todos/:id" },
-        code: {
-          type: "string",
-          description:
-            "JavaScript statements (async allowed) using `req` and `db`, ending with `return { status: 200, body: ... }`",
-        },
+        method: { type: "string" },
+        route: { type: "string" },
+        code: { type: "string" },
         ...summaryProp,
       },
       required: ["method", "route", "code", "summary"],
@@ -192,21 +183,17 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "add_accounts",
-    description:
-      "Enable sign-up/login accounts for the app's end users. Adds built-in endpoints (api/_auth/signup, api/_auth/login, api/_auth/logout, api/_auth/me) and makes the signed-in user available to write_backend_handler code as req.user.",
+    description: "Enable sign-up/login for the app's end users.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
   },
   {
     name: "build_workspace_app",
     description:
-      "Build a Vite/React package from the local Axis monorepo (artifacts/*) and load the production dist into this Forge app for Run preview. Use for Axis, axis-preview, tidy-toters, mockup-sandbox, or when a GitHub pull only had SPA shells. Optional package name filter.",
+      "Build a Vite/React package from the local Axis monorepo and load dist into this Forge app. Use package: axis-preview, tidy-toters, etc.",
     parametersJsonSchema: {
       type: "object",
       properties: {
-        package: {
-          type: "string",
-          description: "Optional package filter, e.g. axis-preview, tidy-toters, mockup-sandbox",
-        },
+        package: { type: "string", description: "e.g. axis-preview, tidy-toters, mockup-sandbox" },
         ...summaryProp,
       },
       required: ["summary"],
@@ -214,8 +201,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "run_preview",
-    description:
-      "Ensure the app has a root index.html (promoting a nested one if needed) and confirm the live preview is available via the Run button.",
+    description: "Ensure root index.html exists and confirm preview is ready.",
     parametersJsonSchema: { type: "object", properties: { ...summaryProp }, required: ["summary"] },
   },
 ];
@@ -310,17 +296,16 @@ li{margin:.25rem 0}
 .box{background:#1e293b;border-radius:.75rem;padding:1rem 1.15rem;margin-top:1rem;border:1px solid #334155}
 </style></head><body>
 <h1>This package needs a full build</h1>
-<p>Promoted <code>${fromPath}</code> — it is a <strong>Vite/React</strong> shell that loads <code>/src/main.tsx</code>.</p>
-<p>Say <strong>build axis-preview</strong> to compile from the local monorepo and load the production dist into Run.</p>
+<p>Promoted <code>${fromPath}</code> — Vite/React shell (loads <code>/src/main.tsx</code>).</p>
+<p>In Forge chat say: <strong>build axis-preview</strong> (real build takes 30–180 seconds, not under 1s).</p>
 <div class="box">
-<p style="margin:0;color:#e2e8f0"><strong>What works in Forge</strong></p>
+<p style="margin:0;color:#e2e8f0"><strong>What works</strong></p>
 <ul>
-<li><code>build axis-preview</code> / <code>build tidy-toters</code> (local monorepo Vite build)</li>
-<li>Describe an app: <code>make a counter app</code>, <code>make a todo list</code></li>
-<li>Self-contained HTML pages with inline CSS/JS</li>
+<li><code>build axis-preview</code> / <code>build tidy-toters</code></li>
+<li><code>make a counter app</code> / <code>make a todo list</code></li>
 </ul>
-<p style="margin:0;color:#94a3b8;font-size:.85rem">Repo areas seen: ${areaList}</p>
-${htmls.length ? `<p style="margin:.5rem 0 0;color:#94a3b8;font-size:.85rem">HTML files: ${htmlList}</p>` : ""}
+<p style="margin:0;color:#94a3b8;font-size:.85rem">Areas: ${areaList}</p>
+${htmls.length ? `<p style="margin:.5rem 0 0;color:#94a3b8;font-size:.85rem">HTML: ${htmlList}</p>` : ""}
 </div>
 </body></html>`;
 }
@@ -464,22 +449,22 @@ async function importGithubIntoForge(
     isSpaShellHtml(rootFile.content) ||
     /needs a full build|Vite\/React/i.test(rootFile.content);
 
-  let built: { package?: string; files?: number } | null = null;
+  let built: { package?: string; files?: number; buildMs?: number } | null = null;
+  let buildError: string | null = null;
   if (needsBuild) {
-    const buildResult = await buildWorkspacePackage(appId, "axis-preview");
+    let buildResult = await buildWorkspacePackage(appId, "axis-preview");
+    if (!buildResult.ok) {
+      buildError = buildResult.error;
+      buildResult = await buildWorkspacePackage(appId);
+    }
     if (buildResult.ok) {
       hasIndex = true;
       promoted = buildResult.package;
-      built = { package: buildResult.package, files: buildResult.files };
+      built = { package: buildResult.package, files: buildResult.files, buildMs: buildResult.buildMs };
+      buildError = null;
       names.unshift("index.html");
     } else {
-      const fallback = await buildWorkspacePackage(appId);
-      if (fallback.ok) {
-        hasIndex = true;
-        promoted = fallback.package;
-        built = { package: fallback.package, files: fallback.files };
-        names.unshift("index.html");
-      }
+      buildError = buildResult.error;
     }
   }
 
@@ -490,13 +475,16 @@ async function importGithubIntoForge(
       hasIndexHtml: hasIndex,
       promotedFrom: promoted,
       builtFromMonorepo: built,
+      buildError,
       hint: built
-        ? `Built ${built.package} from local monorepo (${built.files} files). Press Run to preview.`
-        : hasIndex
-          ? promoted
-            ? `Promoted ${promoted} → index.html. Press Run to preview.`
-            : "Preview is ready — user can press Run."
-          : "Imported files, but no HTML entry. Say build axis-preview or make a simple app.",
+        ? `Built ${built.package} from local monorepo (${built.files} files, ${built.buildMs ?? "?"}ms). Press Run to preview.`
+        : buildError
+          ? `Pulled files but monorepo build failed (${buildError.slice(0, 400)}). Try: build axis-preview`
+          : hasIndex
+            ? promoted
+              ? `Promoted ${promoted} → index.html. Press Run — if blank, say build axis-preview.`
+              : "Preview is ready — user can press Run."
+            : "Imported files, but no HTML entry. Say build axis-preview or make a simple app.",
     },
   };
 }
@@ -655,7 +643,9 @@ async function executeForgeToolOnce(
             package: result.package,
             files: result.files,
             paths: result.paths,
-            hint: `Built ${result.package} (${result.files} files). Press Run to preview.`,
+            buildMs: result.buildMs,
+            indexLooksBuilt: result.indexLooksBuilt,
+            hint: `Built ${result.package} (${result.files} files, ${result.buildMs}ms). Press Run to preview.`,
           },
         };
       }
