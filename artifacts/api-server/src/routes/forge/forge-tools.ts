@@ -270,8 +270,15 @@ function isPlaceholderHtml(content: string): boolean {
 function isSpaShellHtml(content: string): boolean {
   const c = content.toLowerCase();
   if (!c.includes('id="root"') && !c.includes("id='root'")) return false;
-  if (/type\s*=\s*["']module["']/.test(c) && /\.(tsx|jsx|ts|js)["']/.test(c)) return true;
-  if (/src\s*=\s*["'][^"']*\/src\/main\.(tsx|jsx|ts|js)/.test(c)) return true;
+  // Only flag genuinely UNBUILT source references. A built Vite/webpack
+  // bundle always emits plain .js output (often content-hashed, e.g.
+  // assets/index-abc123.js) which browsers execute directly and is NOT a
+  // sign the app still needs building. Matching bare ".js" here (as the
+  // old regex did) was a false positive that misclassified already-built,
+  // ready-to-preview apps as needing a build and silently replaced their
+  // real content with a placeholder page.
+  if (/src\s*=\s*["'][^"']*\.(tsx|jsx|ts)["']/.test(c)) return true;
+  if (/src\s*=\s*["'][^"']*\/src\/main\.(tsx|jsx|ts|js)["']/.test(c)) return true;
   return false;
 }
 
