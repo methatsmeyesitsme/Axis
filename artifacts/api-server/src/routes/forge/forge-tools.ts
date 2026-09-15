@@ -338,13 +338,22 @@ async function ensureRootIndexHtml(
     .sort((a, b) => rank(a.path) - rank(b.path) || a.path.length - b.path.length);
   const best = candidates[0];
 
-  const rootOk = !!root?.content?.trim() && !isPlaceholderHtml(root.content) && !isSpaShellHtml(root.content);
+  const rootHasContent = !!root?.content?.trim() && !isPlaceholderHtml(root.content);
+  const rootIsSpaShell = rootHasContent && isSpaShellHtml(root.content);
+  const rootOk = rootHasContent && !rootIsSpaShell;
 
   if (rootOk && !force) return { ok: true };
   if (rootOk && force && !best) return { ok: true };
 
   if (!best?.content?.trim()) {
     if (rootOk) return { ok: true };
+    // No better nested candidate to promote in its place. If the existing
+    // root index.html is real content — even a Vite/SPA shell that
+    // references already-present hashed asset files — accept it rather
+    // than falsely reporting "no index.html" when one clearly exists,
+    // which just sends the model in circles trying to "create" a file
+    // that's already there.
+    if (rootHasContent) return { ok: true };
     return { ok: false, files: all.map((f) => f.path).slice(0, 30) };
   }
 
