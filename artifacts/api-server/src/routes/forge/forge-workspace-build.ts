@@ -5,31 +5,47 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, dirname } from "path";
 import { spawn } from "child_process";
+import { fileURLToPath } from "url";
 import { db, forgeAppFiles } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const TEXT_EXTS = new Set([
-  "html", "htm", "css", "js", "mjs", "cjs", "json", "svg", "txt", "map", "xml", "woff", "woff2",
+  "html", "htm", "css", "js", "mjs", "cjs", "json", "svg", "txt", "map", "xml",
 ]);
 
 function findMonorepoRoot(): string | null {
   const candidates: string[] = [];
-  let dir = process.cwd();
-  for (let i = 0; i < 10; i++) {
-    candidates.push(dir);
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+  const seeds = [process.cwd()];
+  try {
+    const here = typeof __dirname !== "undefined" ? __dirname : dirname(fileURLToPath(import.meta.url));
+    seeds.push(here);
+  } catch {
+    /* ignore */
   }
-  for (const envKey of ["REPL_HOME", "HOME"]) {
+  for (const seed of seeds) {
+    let dir = seed;
+    for (let i = 0; i < 12; i++) {
+      candidates.push(dir);
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  for (const envKey of ["REPL_HOME", "HOME", "PWD"]) {
     const v = process.env[envKey];
-    if (v) candidates.push(v, join(v, "workspace"));
+    if (v) {
+      candidates.push(v);
+      candidates.push(join(v, "workspace"));
+    }
   }
-  candidates.push("/home/runner/workspace", "/home/runner");
+  candidates.push("/home/runner/workspace", "/home/runner", "/home/user/workspace", "/workspace");
 
+  const seen = new Set<string>();
   for (const c of candidates) {
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
     try {
-      if (c && existsSync(join(c, "pnpm-workspace.yaml"))) return c;
+      if (existsSync(join(c, "pnpm-workspace.yaml"))) return c;
     } catch {
       /* ignore */
     }
@@ -93,7 +109,8 @@ function runCommand(
   cmd: string,
   args: string[],
   opts: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string; ms: number }> {
+  const started = Date.now();
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
@@ -108,8 +125,8 @@ function runCommand(
       } catch {
         /* ignore */
       }
-      resolve({ code: 124, stdout, stderr: stderr + "\n[timeout]" });
-    }, opts.timeoutMs ?? 180_000);
+      resolve({ code: 124, stdout, stderr: stderr + "\n[timeout]", ms: Date.now() - started });
+    }, opts.timeoutMs ?? 240_000);
     child.stdout?.on("data", (d) => {
       stdout += String(d);
       if (stdout.length > 200_000) stdout = stdout.slice(-100_000);
@@ -120,16 +137,16 @@ function runCommand(
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout, stderr });
+      resolve({ code: code ?? 1, stdout, stderr, ms: Date.now() - started });
     });
     child.on("error", (err) => {
       clearTimeout(timer);
-      resolve({ code: 1, stdout, stderr: String(err) });
+      resolve({ code: 1, stdout, stderr: String(err), ms: Date.now() - started });
     });
   });
 }
 
-function walkFiles(dir: string, base = dir): string[] {
+function walkFiles(dir: string): string[] {
   const results: string[] = [];
   if (!existsSync(dir)) return results;
   for (const name of readdirSync(dir)) {
@@ -142,7 +159,7 @@ function walkFiles(dir: string, base = dir): string[] {
     }
     if (st.isDirectory()) {
       if (name === "node_modules" || name === ".git") continue;
-      results.push(...walkFiles(full, base));
+      results.push(...walkFiles(full));
     } else {
       results.push(full);
     }
@@ -160,19 +177,21 @@ function findDistDir(pkgDir: string): string | null {
   return null;
 }
 
-async function loadDistIntoApp(appId: number, distDir: string): Promise<{ files: number; paths: string[] }> {
+async function loadDistIntoApp(
+  appId: number,
+  distDir: string,
+): Promise<{ files: number; paths: string[]; indexPreview: string }> {
   await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
   const all = walkFiles(distDir);
   let files = 0;
   const paths: string[] = [];
+  let indexPreview = "";
   for (const full of all) {
     const rel = relative(distDir, full).replace(/\\/g, "/");
     if (!rel || rel.startsWith("..")) continue;
     const ext = rel.includes(".") ? rel.split(".").pop()!.toLowerCase() : "";
-    if (!TEXT_EXTS.has(ext) && ext !== "") {
-      continue;
-    }
+    if (ext && !TEXT_EXTS.has(ext)) continue;
     let content: string;
     try {
       content = readFileSync(full, "utf8");
@@ -183,34 +202,48 @@ async function loadDistIntoApp(appId: number, distDir: string): Promise<{ files:
     await db.insert(forgeAppFiles).values({ appId, path: rel, content });
     files++;
     paths.push(rel);
+    if (rel === "index.html") indexPreview = content.slice(0, 400);
   }
-  return { files, paths: paths.slice(0, 30) };
+  return { files, paths: paths.slice(0, 40), indexPreview };
 }
 
 export type BuildResult =
-  | { ok: true; package: string; distDir: string; files: number; paths: string[] }
-  | { ok: false; error: string; packages?: string[] };
+  | {
+      ok: true;
+      package: string;
+      distDir: string;
+      files: number;
+      paths: string[];
+      buildMs: number;
+      indexLooksBuilt: boolean;
+    }
+  | { ok: false; error: string; packages?: string[]; buildMs?: number; root?: string | null };
 
-/**
- * Build a frontend package from the local monorepo and load dist into this Forge app.
- * packageHint: optional filter like "axis-preview" or "@workspace/axis-preview"
- */
 export async function buildWorkspacePackage(
   appId: number,
   packageHint?: string,
 ): Promise<BuildResult> {
+  const started = Date.now();
   const root = findMonorepoRoot();
   if (!root) {
     return {
       ok: false,
+      buildMs: Date.now() - started,
+      root: null,
       error:
-        "Could not find the Axis monorepo on disk (no pnpm-workspace.yaml). Forge can only build packages when running inside the Axis Repl.",
+        "Could not find the Axis monorepo on disk (no pnpm-workspace.yaml near the server). " +
+        `cwd=${process.cwd()}. Forge builds only work when the API server runs inside the Axis Repl.`,
     };
   }
 
   const packages = listFrontendPackages(root);
   if (packages.length === 0) {
-    return { ok: false, error: "No frontend packages found under artifacts/." };
+    return {
+      ok: false,
+      buildMs: Date.now() - started,
+      root,
+      error: `No frontend packages under ${root}/artifacts/.`,
+    };
   }
 
   let target = packages[0];
@@ -225,6 +258,8 @@ export async function buildWorkspacePackage(
     if (!match) {
       return {
         ok: false,
+        buildMs: Date.now() - started,
+        root,
         error: `No package matching "${packageHint}". Available: ${packages.map((p) => p.relativeDir).join(", ")}`,
         packages: packages.map((p) => p.relativeDir),
       };
@@ -240,33 +275,46 @@ export async function buildWorkspacePackage(
     NODE_ENV: "production",
   };
 
-  const build = await runCommand(
-    "pnpm",
-    ["--filter", target.name, "run", "build"],
-    { cwd: root, env, timeoutMs: 240_000 },
-  );
+  let build = await runCommand("pnpm", ["--filter", target.name, "run", "build"], {
+    cwd: root,
+    env,
+    timeoutMs: 300_000,
+  });
 
   if (build.code !== 0) {
-    const local = await runCommand("pnpm", ["run", "build"], {
+    build = await runCommand("pnpm", ["run", "build"], {
       cwd: target.dir,
       env,
-      timeoutMs: 240_000,
+      timeoutMs: 300_000,
     });
-    if (local.code !== 0) {
-      const errTail = (local.stderr || build.stderr || local.stdout || build.stdout).slice(-1500);
-      return {
-        ok: false,
-        error: `Build failed for ${target.relativeDir}. ${errTail || "Unknown error"}`,
-        packages: packages.map((p) => p.relativeDir),
-      };
-    }
+  }
+
+  if (build.code !== 0) {
+    build = await runCommand("npx", ["vite", "build", "--config", "vite.config.ts"], {
+      cwd: target.dir,
+      env,
+      timeoutMs: 300_000,
+    });
+  }
+
+  if (build.code !== 0) {
+    const errTail = (build.stderr || build.stdout || "").slice(-2000);
+    return {
+      ok: false,
+      buildMs: Date.now() - started,
+      root,
+      error: `Build failed for ${target.relativeDir} (${build.ms}ms). ${errTail || "pnpm/vite exited non-zero"}`,
+      packages: packages.map((p) => p.relativeDir),
+    };
   }
 
   const distDir = findDistDir(target.dir);
   if (!distDir) {
     return {
       ok: false,
-      error: `Build finished but no dist/index.html found under ${target.relativeDir}.`,
+      buildMs: Date.now() - started,
+      root,
+      error: `Build reported success (${build.ms}ms) but no dist/index.html under ${target.relativeDir}.`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
@@ -275,7 +323,24 @@ export async function buildWorkspacePackage(
   if (loaded.files === 0) {
     return {
       ok: false,
+      buildMs: Date.now() - started,
+      root,
       error: `Dist at ${distDir} had no loadable text assets.`,
+    };
+  }
+
+  const indexLooksBuilt =
+    !!loaded.indexPreview &&
+    !/\/src\/main\.(tsx|jsx|ts|js)/i.test(loaded.indexPreview) &&
+    (/\/assets\//i.test(loaded.indexPreview) || /type=["']module["']/i.test(loaded.indexPreview));
+
+  if (!indexLooksBuilt && /\/src\/main\.(tsx|jsx)/i.test(loaded.indexPreview)) {
+    return {
+      ok: false,
+      buildMs: Date.now() - started,
+      root,
+      error:
+        `Loaded ${loaded.files} files from ${distDir}, but index.html still points at /src/main.tsx — not a production build.`,
     };
   }
 
@@ -285,6 +350,8 @@ export async function buildWorkspacePackage(
     distDir,
     files: loaded.files,
     paths: loaded.paths,
+    buildMs: Date.now() - started,
+    indexLooksBuilt,
   };
 }
 
