@@ -264,6 +264,50 @@ function isPlaceholderHtml(content: string): boolean {
   return false;
 }
 
+/** React/Vite shell: empty without a bundler — do not use as static preview. */
+function isSpaShellHtml(content: string): boolean {
+  const c = content.toLowerCase();
+  if (!c.includes('id="root"') && !c.includes("id='root'")) return false;
+  if (/type\s*=\s*["']module["']/.test(c) && /\.(tsx|jsx|ts|js)["']/.test(c)) return true;
+  if (/src\s*=\s*["'][^"']*\/src\/main\.(tsx|jsx|ts|js)/.test(c)) return true;
+  return false;
+}
+
+function spaLandingHtml(fromPath: string, allPaths: string[]): string {
+  const pkg = fromPath.split("/")[1] || fromPath;
+  const areas = Array.from(new Set(allPaths.map((p) => p.split("/")[0]).filter(Boolean))).slice(0, 10);
+  const htmls = allPaths.filter((p) => p.endsWith(".html")).slice(0, 8);
+  const areaList = areas.map((a) => `<code>${a}</code>`).join(", ") || "—";
+  const htmlList = htmls.map((h) => `<code>${h}</code>`).join(", ");
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${pkg} — needs a build</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;min-height:100dvh}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:1.5rem;line-height:1.5}
+h1{font-size:1.35rem;margin:0 0 .5rem;color:#fff}
+p{margin:.5rem 0;color:#94a3b8;font-size:.95rem}
+code{background:#1e293b;padding:.15rem .4rem;border-radius:.35rem;font-size:.85rem;color:#93c5fd}
+ul{margin:.75rem 0;padding-left:1.25rem;color:#cbd5e1}
+li{margin:.25rem 0}
+.box{background:#1e293b;border-radius:.75rem;padding:1rem 1.15rem;margin-top:1rem;border:1px solid #334155}
+</style></head><body>
+<h1>This package needs a full build</h1>
+<p>Promoted <code>${fromPath}</code> — it is a <strong>Vite/React</strong> shell that loads <code>/src/main.tsx</code>.</p>
+<p>Forge preview only serves static HTML/CSS/JS. It cannot run the Axis monorepo React apps (tidy-toters, mockup-sandbox, axis-preview, etc.).</p>
+<div class="box">
+<p style="margin:0;color:#e2e8f0"><strong>What works in Forge</strong></p>
+<ul>
+<li>Describe an app: <code>make a counter app</code>, <code>make a todo list</code></li>
+<li>Self-contained HTML pages with inline CSS/JS</li>
+</ul>
+<p style="margin:0;color:#94a3b8;font-size:.85rem">Repo areas seen: ${areaList}</p>
+${htmls.length ? `<p style="margin:.5rem 0 0;color:#94a3b8;font-size:.85rem">HTML files: ${htmlList}</p>` : ""}
+</div>
+</body></html>`;
+}
+
 async function ensureRootIndexHtml(
   appId: number,
   opts: { force?: boolean } = {},
@@ -292,7 +336,7 @@ async function ensureRootIndexHtml(
     .sort((a, b) => rank(a.path) - rank(b.path) || a.path.length - b.path.length);
   const best = candidates[0];
 
-  const rootOk = !!root?.content?.trim() && !isPlaceholderHtml(root.content);
+  const rootOk = !!root?.content?.trim() && !isPlaceholderHtml(root.content) && !isSpaShellHtml(root.content);
 
   if (rootOk && !force) return { ok: true };
   if (rootOk && force && !best) return { ok: true };
@@ -302,13 +346,18 @@ async function ensureRootIndexHtml(
     return { ok: false, files: all.map((f) => f.path).slice(0, 30) };
   }
 
+  let contentToWrite = best.content;
+  if (isSpaShellHtml(best.content)) {
+    contentToWrite = spaLandingHtml(best.path, all.map((f) => f.path));
+  }
+
   if (root) {
     await db
       .update(forgeAppFiles)
-      .set({ content: best.content, updatedAt: new Date() })
+      .set({ content: contentToWrite, updatedAt: new Date() })
       .where(eq(forgeAppFiles.id, root.id));
   } else {
-    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: best.content });
+    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: contentToWrite });
   }
   return { ok: true, from: best.path };
 }
