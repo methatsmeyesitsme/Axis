@@ -26,6 +26,9 @@ interface SettingsPanelProps {
   onOpenAuth?: () => void;
 }
 
+// Bump this on every release — shown at the bottom of the Settings panel.
+const APP_VERSION = "v1";
+
 function getStoredTheme(): "light" | "dark" {
   return (localStorage.getItem("theme") as "light" | "dark") ?? "light";
 }
@@ -382,6 +385,8 @@ export default function SettingsPanel({ onClose, onOpenAuth }: SettingsPanelProp
             {loggingOut ? "Signing out…" : "Sign out"}
           </Button>
         )}
+
+        <p className="mt-4 text-center text-xs text-muted-foreground">{APP_VERSION}</p>
       </div>
     </div>
   );

@@ -3,6 +3,9 @@ import { db, conversations, messages, userMemories } from "@workspace/db";
 import { ai, generateImage } from "@workspace/integrations-gemini-ai";
 import {
   localGenerate,
+  localGenerateStreaming,
+  isGreeting,
+  isShortRequest,
   localAgentTurn,
   buildLocalToolResultMessage,
   localWebSearch,
@@ -289,6 +292,7 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
       const workingMessages = [...localMessages];
       const sources: Array<{ url: string; title: string }> = [];
       let reply = "";
+      let usedStreaming = false;
       const wantsWebSearch = /\b(search the web|look up|current|latest|today|news|recent|price|weather|stock)\b/i.test(content);
       const wantsGithubTool =
         /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is)\b/i.test(content) ||
@@ -324,7 +328,18 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
       }
 
       if (localTools.length === 0) {
-        reply = await localGenerate(workingMessages, { maxNewTokens: 1400, maxMessages: 8, maxCharsPerMessage: 2400 });
+        usedStreaming = true;
+        const greeting = isGreeting(content);
+        const short = isShortRequest(content);
+        reply = await localGenerateStreaming(workingMessages, {
+          fast: short || greeting,
+          maxNewTokens: greeting ? 48 : short ? 96 : 900,
+          maxMessages: greeting ? 2 : short ? 3 : 6,
+          maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
+          onToken: (chunk) => {
+            if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+          },
+        });
       } else {
         for (let turn = 0; turn < 6; turn++) {
           const decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 1200 });
@@ -382,7 +397,10 @@ COMBINING ACTIONS: You are not limited to one action per response. If a request 
         await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
       }
       if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ content: savedContent })}\n\n`);
+        // Streaming already pushed the tokens live — don't resend the full text again.
+        if (!usedStreaming) {
+          res.write(`data: ${JSON.stringify({ content: savedContent })}\n\n`);
+        }
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       }

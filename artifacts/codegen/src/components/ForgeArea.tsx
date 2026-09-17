@@ -179,10 +179,16 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         targetId = newConv.id;
         onConversationCreated(targetId);
         if (user) queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
-      } catch {
+      } catch (err) {
         setOptimisticUserMessage(null);
         setInput(fullContent);
-        charQueueRef.current = "Couldn't start a new app just now — please try again.";
+        const serverMessage =
+          err && typeof err === "object" && "data" in err &&
+          err.data && typeof err.data === "object" && "error" in err.data &&
+          typeof (err.data as { error?: unknown }).error === "string"
+            ? (err.data as { error: string }).error
+            : null;
+        charQueueRef.current = serverMessage ?? "Couldn't start a new app just now — please try again.";
         streamingContentRef.current = charQueueRef.current;
         streamDoneRef.current = true;
         finalizeTargetRef.current = null;
@@ -277,7 +283,12 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== "AbortError") {
-        charQueueRef.current += "Connection error. Please try again.";
+        const isNetworkFailure =
+          err.message === "Failed to fetch" ||
+          err.message === "Load failed" ||
+          err.message === "NetworkError when attempting to fetch resource." ||
+          !err.message;
+        charQueueRef.current += isNetworkFailure ? "Connection error. Please try again." : err.message;
       }
       setIsThinking(false);
     } finally {

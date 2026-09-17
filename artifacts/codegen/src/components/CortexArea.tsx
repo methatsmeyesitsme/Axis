@@ -367,7 +367,12 @@ export default function CortexArea({ conversationId, onConversationCreated, onOp
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== "AbortError") {
-        charQueueRef.current += "Connection error. Please try again.";
+        const isNetworkFailure =
+          err.message === "Failed to fetch" ||
+          err.message === "Load failed" ||
+          err.message === "NetworkError when attempting to fetch resource." ||
+          !err.message;
+        charQueueRef.current += isNetworkFailure ? "Connection error. Please try again." : err.message;
       }
       setIsThinking(false);
     } finally {
