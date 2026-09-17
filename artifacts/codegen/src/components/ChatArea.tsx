@@ -12,7 +12,7 @@ import LanguageSelector from "./LanguageSelector";
 import MessageBubble from "./MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown, ChevronLeft, Globe, Copy, Check } from "lucide-react";
+import { Send, Code2, Square, AlertTriangle, LogIn, Plus, Paperclip, X, ChevronDown, ChevronLeft, ChevronRight, Globe, Copy, Check } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { AIThinkingRow } from "./AIStatusLabel";
@@ -24,6 +24,8 @@ interface ChatAreaProps {
   onOpenAuth: () => void;
   forgeHint?: boolean;
   onOpenForge?: () => void;
+  cortexHint?: boolean;
+  onOpenCortex?: () => void;
 }
 
 interface Attachment {
@@ -89,7 +91,7 @@ function buildSmartPrompt(userInput: string): { prompt: string; warning: string 
   return { prompt, warning };
 }
 
-export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth, forgeHint, onOpenForge }: ChatAreaProps) {
+export default function ChatArea({ conversationId, onConversationCreated, onOpenAuth, forgeHint, onOpenForge, cortexHint, onOpenCortex }: ChatAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedLanguage, setSelectedLanguage] = useState("TypeScript");
@@ -522,13 +524,20 @@ export default function ChatArea({ conversationId, onConversationCreated, onOpen
     </div>
   );
 
-  if (conversationId === null) {
+  const showOptimisticForActivity = !!optimisticUserMessage || isThinking || isStreaming;
+  if (conversationId === null && !showOptimisticForActivity && guestMessages.length === 0) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative">
         {forgeHint && (
           <button onClick={onOpenForge} className="absolute top-14 right-6 flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-primary transition-colors z-10">
             <ChevronLeft className="w-3.5 h-3.5" />
             Swipe left to build an app
+          </button>
+        )}
+        {cortexHint && (
+          <button onClick={onOpenCortex} className="absolute top-14 left-6 flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-primary transition-colors z-10">
+            Swipe right for Cortex
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         )}
         <div className="text-center px-8 pt-10 pb-0">
