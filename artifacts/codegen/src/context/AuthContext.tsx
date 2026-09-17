@@ -26,15 +26,33 @@ async function apiPost<T>(path: string, body: object): Promise<T> {
     credentials: "include",
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  const responseText = await res.text();
+  let data: { error?: string } & Partial<T> = {};
+  if (responseText.trim()) {
+    try {
+      data = JSON.parse(responseText) as { error?: string } & Partial<T>;
+    } catch {
+      throw new Error(`Server returned an invalid response (${res.status})`);
+    }
+  }
   if (!res.ok) throw new Error(data.error ?? "Request failed");
+  if (!responseText.trim()) throw new Error("Server returned an empty response");
   return data as T;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { credentials: "include" });
-  const data = await res.json();
+  const responseText = await res.text();
+  let data: { error?: string } & Partial<T> = {};
+  if (responseText.trim()) {
+    try {
+      data = JSON.parse(responseText) as { error?: string } & Partial<T>;
+    } catch {
+      throw new Error(`Server returned an invalid response (${res.status})`);
+    }
+  }
   if (!res.ok) throw new Error(data.error ?? "Request failed");
+  if (!responseText.trim()) throw new Error("Server returned an empty response");
   return data as T;
 }
 

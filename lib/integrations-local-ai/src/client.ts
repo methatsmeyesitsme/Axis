@@ -17,8 +17,10 @@ let largeDisabled = false;
 function largeAllowed(): boolean {
   if (largeDisabled) return false;
   const flag = process.env.LOCAL_MODEL_ALLOW_LARGE?.toLowerCase().trim();
-  if (flag === "false" || flag === "0" || flag === "no") return false;
-  return true;
+  // The larger model can terminate the API process on small Replit
+  // instances. Opt in explicitly instead of making every local route
+  // vulnerable to an OOM restart.
+  return flag === "true" || flag === "1" || flag === "yes";
 }
 
 export function pickModelSize(userText: string, options?: { fast?: boolean }): LocalModelSize {

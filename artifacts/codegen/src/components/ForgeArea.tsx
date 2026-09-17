@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Send, Hammer, Square, LogIn, Play, ChevronDown, X, Compass } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { AIThinkingRow } from "./AIStatusLabel";
+import { AIThinkingRow, ShimmerLabel } from "./AIStatusLabel";
 
 interface ForgeAreaProps {
   conversationId: number | null;
@@ -38,6 +38,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
   const [optimisticBaseline, setOptimisticBaseline] = useState(0);
   const [toolSteps, setToolSteps] = useState<ToolStep[]>([]);
+  const [showToolHistory, setShowToolHistory] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
   const [guestMessages, setGuestMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
@@ -209,6 +210,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
     prevMessagesLengthRef.current = serverMessages.length;
     setDisplayedContent("");
     setToolSteps([]);
+    setShowToolHistory(false);
     setIsThinking(true);
     setIsStreaming(false);
 
@@ -438,24 +440,49 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             {isThinking && <AIThinkingRow text="Working" />}
             {showBubble && (
               <div ref={streamingBubbleRef} className="flex flex-col gap-2">
-                {toolSteps.length > 0 && (
-                  <div className="flex flex-col gap-1.5 pl-1">
-                    {toolSteps.map((step) => (
-                      <div key={step.id} className="flex items-center gap-2 text-xs">
-                        {step.status === "working" ? (
-                          <span className="w-3 h-3 rounded-full border-2 border-primary/30 border-t-primary animate-spin shrink-0" />
-                        ) : step.status === "error" ? (
-                          <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" />
-                        ) : (
-                          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                        )}
-                        <span className={step.status === "working" ? "text-muted-foreground" : "text-foreground"}>
-                          {step.summary}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {toolSteps.length > 0 && (() => {
+                  const activeStep = [...toolSteps].reverse().find((step) => step.status === "working");
+                  const completedSteps = toolSteps.filter((step) => step.status !== "working");
+                  const firstCompleted = completedSteps[0];
+
+                  return (
+                    <div className="flex flex-col gap-2">
+                      {activeStep && <AIThinkingRow text={activeStep.summary} />}
+                      {firstCompleted && (
+                        <div className="ml-11">
+                          <button
+                            type="button"
+                            onClick={() => setShowToolHistory((open) => !open)}
+                            className="flex items-center gap-1.5 text-left text-sm"
+                            aria-expanded={showToolHistory}
+                          >
+                            <ChevronDown
+                              className={`w-3.5 h-3.5 text-primary transition-transform ${showToolHistory ? "rotate-180" : ""}`}
+                            />
+                            <ShimmerLabel text={firstCompleted.summary} />
+                            {completedSteps.length > 1 && (
+                              <span className="text-xs text-muted-foreground">
+                                +{completedSteps.length - 1}
+                              </span>
+                            )}
+                          </button>
+                          {showToolHistory && (
+                            <div className="mt-1.5 ml-5 flex flex-col gap-1 border-l border-primary/20 pl-3">
+                              {completedSteps.map((step) => (
+                                <div key={step.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                    step.status === "error" ? "bg-destructive" : "bg-primary/60"
+                                  }`} />
+                                  <span>{step.summary}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {displayedContent.length > 0 && (
                   <MessageBubble role="assistant" content={displayedContent} isStreaming={isStreaming} />
                 )}
