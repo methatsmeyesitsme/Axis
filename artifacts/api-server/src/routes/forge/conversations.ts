@@ -80,14 +80,38 @@ function wantsEnsurePreview(userText: string): boolean {
   return false;
 }
 
+function wantsDescribeRepo(userText: string): boolean {
+  const t = userText.toLowerCase().trim();
+  if (/\b(describe|explain|what is|what's|whats|tell me about|summarize)\b/.test(t) && /\b(repo|repository|github)\b/.test(t)) return true;
+  if (/^describe\b/.test(t) && /\b(repo|it|this)\b/.test(t)) return true;
+  return false;
+}
+
+/** Only true for explicit pull/import actions — not "describe my repo". */
 function wantsGithubImport(userText: string): boolean {
   const t = userText.toLowerCase().trim();
-  if (wantsEnsurePreview(userText) && !/\b(repo|github|pull from)\b/.test(t)) return false;
+  if (wantsDescribeRepo(userText)) return false;
+  if (wantsEnsurePreview(userText) && !/\b(pull|clone|import)\b/.test(t)) return false;
   if (/\b(import_github_repo|github import)\b/.test(t)) return true;
-  if (/\b(my (connected )?repo|connected repo|connected repository)\b/.test(t)) return true;
-  if (/\b(pull|clone|import|load|fetch)\b/.test(t) && /\b(repo|repository|github)\b/.test(t)) return true;
-  if (/\bpull from\b/.test(t) && /\b(repo|github|connected)\b/.test(t)) return true;
+  // "pull again" / "pull" alone after a prior pull context
+  if (/^(pull|clone|import)\s*(again|it|the repo|my repo|from (my )?(connected )?(repo|github))?\.?$/i.test(t)) return true;
+  if (/\b(pull|clone|import|fetch)\b/.test(t) && /\b(repo|repository|github|connected)\b/.test(t)) return true;
+  if (/\bpull from\b/.test(t)) return true;
+  if (/\b(wire|load)\b/.test(t) && /\b(repo|github)\b/.test(t) && /\b(preview|run|into)\b/.test(t)) return true;
   return false;
+}
+
+function describeConnectedRepoReply(): string {
+  return (
+    "Your connected repo is **Axis** — a pnpm TypeScript monorepo.\n\n" +
+    "It includes:\n" +
+    "- **artifacts/api-server** — Express API (Forge chat, preview, GitHub tools)\n" +
+    "- **artifacts/axis-preview** and other frontends (Vite/React)\n" +
+    "- **lib/** — shared db, API client, AI integrations\n\n" +
+    "Unlike a single HTML file (e.g. ButtonPresser), Axis needs a Vite build for a real preview. " +
+    "Say **pull from my connected repo** to load files, then **Run**. " +
+    "If the preview is blank, say **build axis-preview**."
+  );
 }
 
 function isQuickChat(userText: string): boolean {
@@ -219,7 +243,7 @@ router.post("/:id/messages", async (req, res) => {
   const nowUtc = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const timeUtc = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: true });
 
-  const systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.\n\nYou are Forge. You build real, working single-page web apps that match the user's request.\n\nRules:\n- Always use tools: write_file for index.html (complete HTML/CSS/JS), then run_preview.\n- Do NOT invent a generic "hi" page. Implement what they asked for.\n- One self-contained index.html with inline CSS/JS is preferred.\n- Mobile-friendly: viewport meta, full-width layout.\n- Every tool call needs a short summary.\n- GitHub pull/import → import_github_repo only.\n${isPersisted ? "" : "User is not logged in — ask them to log in before building."}`;
+  const systemPrompt = `Today is ${nowUtc}, ${timeUtc} UTC.\n\nYou are Forge. You build real, working single-page web apps that match the user's request.\n\nRules:\n- Always use tools: write_file for index.html (complete HTML/CSS/JS), then run_preview.\n- Do NOT invent a generic "hi" page. Implement what they asked for.\n- One self-contained index.html with inline CSS/JS is preferred.\n- Mobile-friendly: viewport meta, full-width layout.\n- Every tool call needs a short summary.\n- GitHub pull/import → import_github_repo only when the user asks to pull/import.\n- If they ask to describe the repo, answer in text — do not pull.\n${isPersisted ? "" : "User is not logged in — ask them to log in before building."}`;
 
   if (getAiProvider() === "local") {
     res.setHeader("Content-Type", "text/event-stream");
@@ -268,6 +292,11 @@ router.post("/:id/messages", async (req, res) => {
         savedContent += msg;
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
         endedNaturally = true;
+      } else if (wantsDescribeRepo(content)) {
+        const msg = "\n\n" + describeConnectedRepoReply();
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+        endedNaturally = true;
       } else if (wantsGithubImport(content)) {
         if (!isPersisted) {
           const msg = "\n\nLog in and connect GitHub in **Settings** (PAT with repo scope), then try again: pull from my connected repo.";
@@ -276,189 +305,156 @@ router.post("/:id/messages", async (req, res) => {
           endedNaturally = true;
         } else {
           const importResult = await runTool("import_github_repo", { path: "", summary: "Imported GitHub repo" });
-          const importedOutput = importResult.output as { hasIndexHtml?: boolean; imported?: number; files?: string[]; promotedFrom?: string } | undefined;
+          const importedOutput = importResult.output as {
+            hasIndexHtml?: boolean;
+            imported?: number;
+            files?: string[];
+            promotedFrom?: string;
+            builtFromMonorepo?: { package?: string; files?: number; buildMs?: number } | null;
+            buildError?: string | null;
+          } | undefined;
           if (!importResult.error && importedOutput?.hasIndexHtml) {
             await runTool("run_preview", { summary: "Preview ready" });
           }
           let msg: string;
           if (importResult.error) msg = `\n\nI couldn't pull that repository: ${importResult.error}`;
-          else if (importedOutput?.hasIndexHtml) {
+          else if (importedOutput?.builtFromMonorepo?.package) {
+            const b = importedOutput.builtFromMonorepo;
+            msg = `\n\nBuilt **${b.package}** from the local monorepo (**${b.files ?? "?"}** files, **${b.buildMs ?? "?"}ms**). Press **Run** to preview.`;
+          } else if (importedOutput?.buildError) {
+            msg = `\n\nPulled **${importedOutput.imported ?? 0}** file(s), but the monorepo build failed:\n\`${String(importedOutput.buildError).slice(0, 500)}\`\n\nTry: **build axis-preview**.`;
+          } else if (importedOutput?.hasIndexHtml) {
             const promoted = importedOutput.promotedFrom;
             msg = promoted
               ? `\n\nPulled **${importedOutput.imported ?? 0}** file(s). Promoted **${promoted}** → **index.html**. Press **Run** to preview.`
               : `\n\nPulled **${importedOutput.imported ?? 0}** file(s) from your connected GitHub repo. Press **Run** to preview.`;
           } else {
             const names = (importedOutput?.files ?? []).slice(0, 12).join(", ") || "(none listed)";
-            msg = `\n\nPulled files (${names}) but there is no **index.html**. Try **make a counter app**.`;
+            msg = `\n\nPulled files (${names}) but there is no **index.html**. Try **build axis-preview** or **make a counter app**.`;
           }
           savedContent += msg;
           if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
           endedNaturally = true;
         }
-      } else if (wantsEnsurePreview(content) && isPersisted) {
-        const previewResult = await runTool("run_preview", { summary: "Preview ready" });
-        if (previewResult.error) {
-          const msg = `\n\n${previewResult.error}\n\nSay **pull from my connected repo** after rebuild, or try **make a counter app**.`;
-          savedContent += msg;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-        } else {
-          const out = typeof previewResult.output === "string" ? previewResult.output : "Preview ready";
-          const msg = `\n\n${out}. Press **Run** to open it.`;
-          savedContent += msg;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-        }
-        endedNaturally = true;
-      } else if (!isPersisted) {
-        const msg = "\n\nLog in first so Forge can save your app files.";
-        savedContent += msg;
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-        endedNaturally = true;
-      } else if (tryDeterministicApp(content)) {
-        const built = tryDeterministicApp(content)!;
-        await runTool("write_file", { path: built.path, content: built.content, summary: built.summary });
-        await runTool("run_preview", { summary: "Preview ready" });
-        const msg = `\n\nBuilt **${built.path}**. Press **Run** to open the preview.`;
-        savedContent += msg;
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-        endedNaturally = true;
       } else {
-        const workingMessages: LocalChatMessage[] = [
-          {
-            role: "system",
-            content: `${systemPrompt}\n\nUse the JSON tool protocol. Build the real app with write_file (full index.html) + run_preview. Never substitute a generic hi page.`,
-          },
-          ...history.slice(-6).map((m): LocalChatMessage => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.content.slice(0, 2500),
-          })),
-          { role: "user", content: content.slice(0, 3000) },
-        ];
-        const localTools = toLocalToolDefinitions(forgeToolDeclarations);
-
-        for (let turn = 0; turn < 4; turn++) {
-          let decision;
-          try {
-            decision = await localAgentTurn(workingMessages, localTools, { maxNewTokens: 500, fast: true });
-          } catch (modelErr) {
-            const detail = modelErr instanceof Error ? modelErr.message : String(modelErr);
-            const fallback = tryDeterministicApp(content);
-            if (fallback) {
-              await runTool("write_file", { path: fallback.path, content: fallback.content, summary: fallback.summary });
-              await runTool("run_preview", { summary: "Preview ready" });
-              const msg = "\n\nUsed a built-in layout. Press **Run**.";
-              savedContent += msg;
-              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-              endedNaturally = true;
-            } else {
-              const msg = `\n\nLocal model error: ${detail}. Try **make a counter app** or **make a todo list**.`;
-              savedContent += msg;
-              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-              endedNaturally = true;
-            }
-            break;
-          }
-
-          if (decision.kind === "final") {
-            const text = decision.content.trim();
-            if ((text.startsWith("{") && text.includes("summary")) || isToolProtocolLeak(text)) {
-              const fallback = tryDeterministicApp(content);
-              if (fallback) {
-                await runTool("write_file", { path: fallback.path, content: fallback.content, summary: fallback.summary });
-                await runTool("run_preview", { summary: "Preview ready" });
-                const msg = "\n\nSaved **index.html**. Press **Run**.";
-                savedContent += msg;
-                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-                endedNaturally = true;
-              } else {
-                const msg = "\n\nI couldn't finish that. Try **make a counter app**, **make a todo list**, or **pull from my connected repo**.";
-                savedContent += msg;
-                if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-                endedNaturally = true;
-              }
-            } else {
-              endedNaturally = true;
-              savedContent += text;
-              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
-            }
-            break;
-          }
-
-          const args = { ...decision.arguments };
-          if (decision.name === "write_file" && !String(args.content ?? "").trim()) {
-            const filled = tryDeterministicApp(content);
-            if (filled) {
-              args.path = filled.path;
-              args.content = filled.content;
-              args.summary = filled.summary;
+        const det = tryDeterministicApp(content);
+        if (det && isPersisted) {
+          await runTool("write_file", { path: det.path, content: det.content, summary: det.summary });
+          await runTool("run_preview", { summary: "Preview ready" });
+          const msg = `\n\n${det.summary}. Press **Run** to preview.`;
+          savedContent += msg;
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+          endedNaturally = true;
+        } else if (wantsEnsurePreview(content) && isPersisted) {
+          const result = await runTool("run_preview", { summary: "Preview ready" });
+          const msg = result.error
+            ? `\n\n${result.error}\n\nSay **pull from my connected repo** after rebuild, or try **make a counter app**.`
+            : "\n\nPreview is ready. Press **Run**.";
+          savedContent += msg;
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+          endedNaturally = true;
+        } else {
+          // Fall through to local model
+          const tools = toLocalToolDefinitions(forgeToolDeclarations as unknown as Array<{ name: string; description?: string; parametersJsonSchema?: unknown }>);
+          const msgs: LocalChatMessage[] = [
+            { role: "system", content: systemPrompt },
+            ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+            { role: "user", content },
+          ];
+          const turn = await localAgentTurn({ messages: msgs, tools });
+          if (turn.toolCalls?.length) {
+            for (const tc of turn.toolCalls) {
+              const result = await runTool(tc.name, (tc.arguments ?? {}) as Record<string, unknown>);
+              if (result.error) lastToolError = result.error;
             }
           }
-
-          if (decision.name === "import_github_repo") {
-            const result = await runTool(decision.name, args);
-            const out = result.output as { hasIndexHtml?: boolean } | undefined;
-            if (!result.error && out?.hasIndexHtml) await runTool("run_preview", { summary: "Preview ready" });
-            const msg = result.error ? `\n\nImport failed: ${result.error}` : "\n\nImport finished. Press **Run** if index.html is present.";
-            savedContent += msg;
-            if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-            endedNaturally = true;
-            break;
+          if (turn.content && !isToolProtocolLeak(turn.content)) {
+            savedContent += turn.content;
+            if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: turn.content })}\n\n`);
           }
-
-          const toolResult = await runTool(decision.name, args);
-          workingMessages.push({ role: "assistant", content: JSON.stringify({ tool: decision.name, arguments: args }) });
-          workingMessages.push({
-            role: "user",
-            content: buildLocalToolResultMessage(decision.name, toolResult),
-          });
-
-          if (decision.name === "write_file" && !toolResult.error) {
-            await runTool("run_preview", { summary: "Preview ready" });
-            const msg = "\n\nSaved **index.html**. Press **Run** to open the preview.";
-            savedContent += msg;
-            if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-            endedNaturally = true;
-            break;
-          }
+          endedNaturally = true;
         }
-
-        if (!endedNaturally) {
-          const fallback = lastToolError
-            ? `\n\nStopped after a tool error: ${lastToolError}`
-            : "\n\nCouldn't finish that build. Try **make a counter app**, **make a todo list**, or **pull from my connected repo**.";
-          savedContent += fallback;
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
-        }
-      }
-
-      if (isPersisted && savedContent) {
-        await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent });
-      }
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[forge] build error", err);
+      console.error("[forge] local path error", err);
       const friendlyMessage =
         wantsGithubImport(content)
           ? `GitHub pull failed: ${detail}. Check Settings → GitHub (PAT with repo scope).`
-          : friendlyGeminiErrorMessage(err, `Build failed: ${detail}`);
+          : `Something went wrong: ${detail}`;
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ error: friendlyMessage })}\n\n`);
-        res.end();
       }
+    }
+
+    if (isPersisted && savedContent.trim()) {
+      await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent.trim() });
+    }
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
     }
     return;
   }
 
+  // Non-local (Gemini) path — still honor describe vs pull
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
+  res.write(`data: ${JSON.stringify({ status: "working" })}\n\n`);
+
+  let savedContent = "";
+  try {
+    if (wantsDescribeRepo(content)) {
+      const msg = "\n\n" + describeConnectedRepoReply();
+      savedContent += msg;
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+    } else if (wantsGithubImport(content) && isPersisted) {
+      const importResult = await executeForgeTool(id, "import_github_repo", { path: "", summary: "Imported GitHub repo" }, userId);
+      if (!importResult.error) {
+        await executeForgeTool(id, "run_preview", { summary: "Preview ready" }, userId);
+      }
+      const importedOutput = importResult.output as { hasIndexHtml?: boolean; imported?: number; promotedFrom?: string } | undefined;
+      const msg = importResult.error
+        ? `\n\nI couldn't pull that repository: ${importResult.error}`
+        : importedOutput?.promotedFrom
+          ? `\n\nPulled **${importedOutput.imported ?? 0}** file(s). Promoted **${importedOutput.promotedFrom}** → **index.html**. Press **Run** to preview.`
+          : `\n\nPulled **${importedOutput?.imported ?? 0}** file(s). Press **Run** to preview.`;
+      savedContent += msg;
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+    } else {
+      const det = tryDeterministicApp(content);
+      if (det && isPersisted) {
+        await executeForgeTool(id, "write_file", { path: det.path, content: det.content, summary: det.summary }, userId);
+        await executeForgeTool(id, "run_preview", { summary: "Preview ready" }, userId);
+        const msg = `\n\n${det.summary}. Press **Run** to preview.`;
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+      } else {
+        const msg = "\n\nTry: **pull from my connected repo**, **describe my repo**, or **make a counter app**.";
+        savedContent += msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+      }
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("[forge] build error", err);
+    const friendlyMessage =
+      wantsGithubImport(content)
+        ? `GitHub pull failed: ${detail}. Check Settings → GitHub (PAT with repo scope).`
+        : friendlyGeminiErrorMessage(err, `Build failed: ${detail}`);
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ error: friendlyMessage })}\n\n`);
+    }
+  }
+
+  if (isPersisted && savedContent.trim()) {
+    await db.insert(messages).values({ conversationId: id, role: "assistant", content: savedContent.trim() });
+  }
   if (!res.writableEnded) {
-    res.write(`data: ${JSON.stringify({ error: "Cloud AI is not configured. Set AXIS_AI_PROVIDER=local." })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   }
 });
