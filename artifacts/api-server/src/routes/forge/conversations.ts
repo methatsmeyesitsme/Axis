@@ -21,13 +21,16 @@ const MAX_TOOL_TURNS = 8;
 
 function isExplicitPullIntent(userText: string): boolean {
   const t = userText.trim().toLowerCase();
-  if (!t || t.length > 160) return false;
-  if (/^(please\s+)?(pull|clone|import|fetch)(\s|$)/i.test(t) === false) return false;
-  if (/\b(describe|explain|what is|tell me about)\b/i.test(t)) return false;
+  if (!t || t.length > 200) return false;
+  if (!/^(please\s+)?(pull|clone|import|fetch)\b/i.test(t)) return false;
   if (/^(please\s+)?(pull|clone|import|fetch)(\s+(again|it|now|repo|the\s+repo))?\.?$/i.test(t)) return true;
-  if (/\b(pull|clone|import|fetch)\b.*\b(repo|repository|github)\b/i.test(t)) return true;
-  if (/\b(pull|clone|import|fetch)\b.*\b(connected)\b/i.test(t)) return true;
+  if (/\b(repo|repository|github|connected)\b/i.test(t)) return true;
+  if (/^(please\s+)?(pull|clone|import|fetch)\s+/i.test(t)) return true;
   return false;
+}
+
+function wantsDescribeWithPull(userText: string): boolean {
+  return /\b(describe|explain|what is|tell me about)\b/i.test(userText);
 }
 
 function isGreeting(userText: string): boolean {
@@ -38,7 +41,7 @@ function isGreeting(userText: string): boolean {
 function isDescribeRepoIntent(userText: string): boolean {
   const t = userText.trim().toLowerCase();
   if (!t || t.length > 200) return false;
-  if (/\b(pull|clone|import|fetch)\b/i.test(t) && !/\bdescribe\b/i.test(t)) return false;
+  if (/^(please\s+)?(pull|clone|import|fetch)\b/i.test(t)) return false;
   return (
     /\bdescribe\b.*\b(repo|repository|project|codebase|axis)\b/i.test(t) ||
     /\bwhat\s+(is|does)\s+(my|the|this)\s+(repo|repository|project)\b/i.test(t) ||
@@ -407,7 +410,10 @@ router.post("/:id/messages", async (req, res) => {
             await runTool("run_preview", { summary: "Preview ready" });
           }
         }
-        const msg = formatPullResult(importResult.output, importResult.error);
+        let msg = formatPullResult(importResult.output, importResult.error);
+        if (wantsDescribeWithPull(content) && !importResult.error) {
+          msg += "\n\n" + formatRepoDescription();
+        }
         savedContent += (savedContent ? "\n\n" : "") + msg;
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
       }
