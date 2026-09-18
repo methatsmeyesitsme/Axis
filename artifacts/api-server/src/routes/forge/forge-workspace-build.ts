@@ -1,11 +1,9 @@
 /**
- * Build a Vite/React package from the local Axis monorepo and load dist into
- * forgeAppFiles for static preview.
+ * Load a Vite/React package into forgeAppFiles for static preview.
  *
- * Speed strategy:
- * 1. Reuse existing dist (rewrite base) — near-instant
- * 2. One fast vite build (FORGE_FAST_BUILD, no minify, 45s timeout)
- * 3. Never chain three 180s builds (that felt like "minutes / never finishes")
+ * Hard rule: the HTTP request path must finish in ~15s. A full axis-preview
+ * Vite build can take minutes — so by default we ONLY reuse an existing dist.
+ * Cold compile is opt-in (forceCompile) with a 12s kill switch.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, dirname } from "path";
@@ -18,9 +16,8 @@ const TEXT_EXTS = new Set([
   "html", "htm", "css", "js", "mjs", "cjs", "json", "svg", "txt", "map", "xml",
 ]);
 
-/** In-process cache: package dir → last successful dist path */
 const distCache = new Map<string, { distDir: string; at: number }>();
-const DIST_CACHE_MS = 10 * 60 * 1000;
+const DIST_CACHE_MS = 30 * 60 * 1000;
 
 function findMonorepoRoot(): string | null {
   const candidates: string[] = [];
@@ -135,14 +132,14 @@ function runCommand(
         /* ignore */
       }
       resolve({ code: 124, stdout, stderr: stderr + "\n[timeout]", ms: Date.now() - started });
-    }, opts.timeoutMs ?? 45_000);
+    }, opts.timeoutMs ?? 12_000);
     child.stdout?.on("data", (d) => {
       stdout += String(d);
-      if (stdout.length > 100_000) stdout = stdout.slice(-50_000);
+      if (stdout.length > 80_000) stdout = stdout.slice(-40_000);
     });
     child.stderr?.on("data", (d) => {
       stderr += String(d);
-      if (stderr.length > 100_000) stderr = stderr.slice(-50_000);
+      if (stderr.length > 80_000) stderr = stderr.slice(-40_000);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -187,7 +184,6 @@ function distLooksBuilt(distDir: string): boolean {
   try {
     const html = readFileSync(join(distDir, "index.html"), "utf8");
     if (/\/src\/main\.(tsx|jsx|ts|js)/i.test(html)) return false;
-    // Has hashed assets or at least a module script that is not source
     if (/assets\//i.test(html) && /\.js/i.test(html)) return true;
     if (/type=["']module["']/i.test(html) && !/src\/main/i.test(html)) return true;
     return false;
@@ -196,11 +192,9 @@ function distLooksBuilt(distDir: string): boolean {
   }
 }
 
-/** Relative base so one dist works for every forge app id without rebuild. */
 function rewritePreviewBase(content: string, path: string, basePath: string): string {
   let out = content;
   out = out.replace(/\/api\/forge\/preview\/\d+\//g, basePath);
-  // Absolute /assets → relative under base
   if (path === "index.html" || path.endsWith(".html")) {
     out = out.replace(/(href|src)=(["'])\/assets\//g, `$1=$2${basePath}assets/`);
     if (/<base\s/i.test(out)) {
@@ -242,12 +236,26 @@ async function loadDistIntoApp(
     if (rel === "index.html") indexPreview = content.slice(0, 400);
   }
 
-  const chunk = 40;
+  const chunk = 50;
   for (let i = 0; i < rows.length; i += chunk) {
     await db.insert(forgeAppFiles).values(rows.slice(i, i + chunk));
   }
 
   return { files: rows.length, paths: paths.slice(0, 40), indexPreview };
+}
+
+function pickPackage(packages: WorkspacePackage[], packageHint?: string): WorkspacePackage | null {
+  if (!packages.length) return null;
+  if (!packageHint?.trim()) return packages[0];
+  const h = packageHint.trim().toLowerCase();
+  return (
+    packages.find(
+      (p) =>
+        p.name.toLowerCase().includes(h) ||
+        p.relativeDir.toLowerCase().includes(h) ||
+        p.relativeDir.split("/").pop()?.toLowerCase() === h,
+    ) ?? null
+  );
 }
 
 export type BuildResult =
@@ -263,20 +271,24 @@ export type BuildResult =
     }
   | { ok: false; error: string; packages?: string[]; buildMs?: number; root?: string | null };
 
+/**
+ * Load package for Forge preview. Default = dist-only (seconds).
+ * Set forceCompile=true only for explicit rebuild attempts (12s max).
+ */
 export async function buildWorkspacePackage(
   appId: number,
   packageHint?: string,
+  opts?: { forceCompile?: boolean },
 ): Promise<BuildResult> {
   const started = Date.now();
+  const forceCompile = !!opts?.forceCompile;
   const root = findMonorepoRoot();
   if (!root) {
     return {
       ok: false,
       buildMs: Date.now() - started,
       root: null,
-      error:
-        "Could not find the Axis monorepo on disk (no pnpm-workspace.yaml near the server). " +
-        `cwd=${process.cwd()}.`,
+      error: `Could not find Axis monorepo (no pnpm-workspace.yaml). cwd=${process.cwd()}.`,
     };
   }
 
@@ -290,67 +302,64 @@ export async function buildWorkspacePackage(
     };
   }
 
-  let target = packages[0];
-  if (packageHint?.trim()) {
-    const h = packageHint.trim().toLowerCase();
-    const match = packages.find(
-      (p) =>
-        p.name.toLowerCase().includes(h) ||
-        p.relativeDir.toLowerCase().includes(h) ||
-        p.relativeDir.split("/").pop()?.toLowerCase() === h,
-    );
-    if (!match) {
-      return {
-        ok: false,
-        buildMs: Date.now() - started,
-        root,
-        error: `No package matching "${packageHint}". Available: ${packages.map((p) => p.relativeDir).join(", ")}`,
-        packages: packages.map((p) => p.relativeDir),
-      };
-    }
-    target = match;
+  const target = pickPackage(packages, packageHint);
+  if (!target) {
+    return {
+      ok: false,
+      buildMs: Date.now() - started,
+      root,
+      error: `No package matching "${packageHint}". Available: ${packages.map((p) => p.relativeDir).join(", ")}`,
+      packages: packages.map((p) => p.relativeDir),
+    };
   }
 
   const basePath = `/api/forge/preview/${appId}/`;
 
-  // 1) Memory cache
+  // Always try cache + disk first (target: under 1–3s)
+  const tryLoad = async (distDir: string, reused: boolean): Promise<BuildResult | null> => {
+    if (!distLooksBuilt(distDir)) return null;
+    const loaded = await loadDistIntoApp(appId, distDir, basePath);
+    if (loaded.files === 0) return null;
+    distCache.set(target.dir, { distDir, at: Date.now() });
+    return {
+      ok: true,
+      package: target.relativeDir,
+      distDir,
+      files: loaded.files,
+      paths: loaded.paths,
+      buildMs: Date.now() - started,
+      indexLooksBuilt: true,
+      reusedDist: reused,
+    };
+  };
+
   const cached = distCache.get(target.dir);
-  if (cached && Date.now() - cached.at < DIST_CACHE_MS && distLooksBuilt(cached.distDir)) {
-    const loaded = await loadDistIntoApp(appId, cached.distDir, basePath);
-    if (loaded.files > 0) {
-      return {
-        ok: true,
-        package: target.relativeDir,
-        distDir: cached.distDir,
-        files: loaded.files,
-        paths: loaded.paths,
-        buildMs: Date.now() - started,
-        indexLooksBuilt: true,
-        reusedDist: true,
-      };
-    }
+  if (cached && Date.now() - cached.at < DIST_CACHE_MS) {
+    const hit = await tryLoad(cached.distDir, true);
+    if (hit) return hit;
   }
 
-  // 2) Disk dist already present
   const existingDist = findDistDir(target.dir);
-  if (existingDist && distLooksBuilt(existingDist)) {
-    distCache.set(target.dir, { distDir: existingDist, at: Date.now() });
-    const loaded = await loadDistIntoApp(appId, existingDist, basePath);
-    if (loaded.files > 0) {
-      return {
-        ok: true,
-        package: target.relativeDir,
-        distDir: existingDist,
-        files: loaded.files,
-        paths: loaded.paths,
-        buildMs: Date.now() - started,
-        indexLooksBuilt: true,
-        reusedDist: true,
-      };
-    }
+  if (existingDist) {
+    const hit = await tryLoad(existingDist, true);
+    if (hit) return hit;
   }
 
-  // 3) One fast Vite build only (relative base → reusable)
+  // No dist — do NOT hang on a multi-minute Vite build during chat
+  if (!forceCompile) {
+    return {
+      ok: false,
+      buildMs: Date.now() - started,
+      root,
+      error:
+        `No built dist for ${target.relativeDir} yet. In the Replit shell run once:\n` +
+        `  cd ${target.relativeDir} && pnpm run build\n` +
+        `Then say pull / build again — loading dist takes a few seconds (not minutes).`,
+      packages: packages.map((p) => p.relativeDir),
+    };
+  }
+
+  // Opt-in cold compile with hard 12s limit
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: process.env.PORT || "5000",
@@ -359,76 +368,57 @@ export async function buildWorkspacePackage(
     FORGE_FAST_BUILD: "1",
   };
 
-  // Prefer node_modules/.bin/vite if present (avoids slow pnpm resolve)
   const viteBin = join(target.dir, "node_modules", ".bin", "vite");
   const rootViteBin = join(root, "node_modules", ".bin", "vite");
-  let build: { code: number; stdout: string; stderr: string; ms: number };
+  const cmd = existsSync(viteBin) ? viteBin : existsSync(rootViteBin) ? rootViteBin : null;
 
-  if (existsSync(viteBin)) {
-    build = await runCommand(viteBin, ["build", "--config", "vite.config.ts", "--logLevel", "error"], {
+  let build: { code: number; stdout: string; stderr: string; ms: number };
+  if (cmd) {
+    build = await runCommand(cmd, ["build", "--config", "vite.config.ts", "--logLevel", "error"], {
       cwd: target.dir,
       env,
-      timeoutMs: 45_000,
-    });
-  } else if (existsSync(rootViteBin)) {
-    build = await runCommand(rootViteBin, ["build", "--config", "vite.config.ts", "--logLevel", "error"], {
-      cwd: target.dir,
-      env,
-      timeoutMs: 45_000,
+      timeoutMs: 12_000,
     });
   } else {
     build = await runCommand(
       "pnpm",
       ["exec", "vite", "build", "--config", "vite.config.ts", "--logLevel", "error"],
-      { cwd: target.dir, env, timeoutMs: 45_000 },
+      { cwd: target.dir, env, timeoutMs: 12_000 },
     );
   }
 
   if (build.code !== 0) {
-    const errTail = (build.stderr || build.stdout || "").slice(-1500);
+    const errTail = (build.stderr || build.stdout || "").slice(-1200);
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
       error:
         build.code === 124
-          ? `Build timed out after ${build.ms}ms for ${target.relativeDir}. Run once in the shell: cd ${target.relativeDir} && pnpm run build — then pull again to reuse dist.`
-          : `Build failed for ${target.relativeDir} (${build.ms}ms). ${errTail || "vite exited non-zero"}`,
+          ? `Vite cannot finish ${target.relativeDir} in 12s. Run in shell: cd ${target.relativeDir} && pnpm run build — then pull again (instant).`
+          : `Build failed (${build.ms}ms): ${errTail || "non-zero exit"}`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
 
   const distDir = findDistDir(target.dir);
-  if (!distDir || !distLooksBuilt(distDir)) {
+  if (!distDir) {
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error: `Build finished (${build.ms}ms) but dist is missing or still a source shell under ${target.relativeDir}.`,
-      packages: packages.map((p) => p.relativeDir),
+      error: `Build exited 0 but no dist/index.html under ${target.relativeDir}.`,
     };
   }
 
-  distCache.set(target.dir, { distDir, at: Date.now() });
-  const loaded = await loadDistIntoApp(appId, distDir, basePath);
-  if (loaded.files === 0) {
-    return {
-      ok: false,
-      buildMs: Date.now() - started,
-      root,
-      error: `Dist at ${distDir} had no loadable text assets.`,
-    };
-  }
+  const hit = await tryLoad(distDir, false);
+  if (hit) return hit;
 
   return {
-    ok: true,
-    package: target.relativeDir,
-    distDir,
-    files: loaded.files,
-    paths: loaded.paths,
+    ok: false,
     buildMs: Date.now() - started,
-    indexLooksBuilt: true,
-    reusedDist: false,
+    root,
+    error: `Dist at ${distDir} could not be loaded into the app.`,
   };
 }
 
