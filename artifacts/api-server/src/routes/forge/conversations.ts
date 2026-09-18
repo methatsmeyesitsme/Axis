@@ -20,48 +20,58 @@ const CURRENT_MSG_CHARS = 8000;
 const MAX_TOOL_TURNS = 8;
 
 function isExplicitPullIntent(userText: string): boolean {
-  const t = userText.trim().toLowerCase();
-  if (!t || t.length > 200) return false;
-  if (!/^(please\s+)?(pull|clone|import|fetch)\b/i.test(t)) return false;
-  if (/^(please\s+)?(pull|clone|import|fetch)(\s+(again|it|now|repo|the\s+repo))?\.?$/i.test(t)) return true;
-  if (/\b(repo|repository|github|connected)\b/i.test(t)) return true;
-  if (/^(please\s+)?(pull|clone|import|fetch)\s+/i.test(t)) return true;
+  const t = (userText || "").trim().toLowerCase();
+  if (!t) return false;
+  if (t === "pull" || t === "pull again" || t === "pull it" || t === "pull now") return true;
+  if (t.startsWith("pull ") || t.startsWith("please pull")) return true;
+  if (t.startsWith("clone ") || t.startsWith("import ")) return true;
+  if (t.includes("pull") && (t.includes("repo") || t.includes("github") || t.includes("connected"))) return true;
   return false;
 }
 
 function wantsDescribeWithPull(userText: string): boolean {
-  return /\b(describe|explain|what is|tell me about)\b/i.test(userText);
+  const t = (userText || "").toLowerCase();
+  return t.includes("describe") || t.includes("explain") || t.includes("what is") || t.includes("tell me about");
 }
 
 function isGreeting(userText: string): boolean {
-  const t = userText.trim().toLowerCase();
+  const t = (userText || "").trim().toLowerCase();
   return /^(hi|hello|hey|yo|sup|good\s+(morning|afternoon|evening))[\s!.?]*$/i.test(t);
 }
 
 function isDescribeRepoIntent(userText: string): boolean {
-  const t = userText.trim().toLowerCase();
-  if (!t || t.length > 200) return false;
-  if (/^(please\s+)?(pull|clone|import|fetch)\b/i.test(t)) return false;
+  const t = (userText || "").trim().toLowerCase();
+  if (!t) return false;
+  if (isExplicitPullIntent(t)) return false;
   return (
-    /\bdescribe\b.*\b(repo|repository|project|codebase|axis)\b/i.test(t) ||
-    /\bwhat\s+(is|does)\s+(my|the|this)\s+(repo|repository|project)\b/i.test(t) ||
-    /\btell\s+me\s+about\s+(my|the|this)\s+(repo|repository|project)\b/i.test(t) ||
-    /^describe\s+(my\s+)?(repo|repository|project)\.?$/i.test(t)
+    (t.includes("describe") && (t.includes("repo") || t.includes("project") || t.includes("axis"))) ||
+    t.includes("what is my repo") ||
+    t.includes("tell me about my repo") ||
+    t === "describe my repo" ||
+    t === "describe the repo"
   );
 }
 
 function formatRepoDescription(): string {
-  const { root, packages } = describeMonorepo();
-  if (!root) {
-    return "I couldn't locate the Axis monorepo on this server. After git pull and a Repl restart, try again.";
+  try {
+    const { root, packages } = describeMonorepo();
+    if (!root) {
+      return "Axis is this product's monorepo (preview package: artifacts/axis-preview).";
+    }
+    const names = packages.map((p) => p.relativeDir).slice(0, 12);
+    const list = names.length ? names.map((n) => "• " + n).join("\n") : "(packages listed after git pull)";
+    return (
+      "**Axis** monorepo" +
+      (root ? ` at \`${root}\`` : "") +
+      ".\n\n" +
+      "Frontend packages:\n" +
+      list +
+      "\n\n" +
+      "Preview uses **artifacts/axis-preview**. Press **Run** after a pull."
+    );
+  } catch {
+    return "Axis is a monorepo; Forge preview targets artifacts/axis-preview.";
   }
-  const names = packages.map((p) => p.relativeDir).slice(0, 12);
-  const list = names.length ? names.map((n) => `• ${n}`).join("\n") : "(no frontend packages found)";
-  return (
-    `**Axis** is a monorepo at \`${root}\`.\n\n` +
-    `Frontend packages:\n${list}\n\n` +
-    `Forge preview uses **artifacts/axis-preview**. Say **pull** to load it, or ask me to build something new.`
-  );
 }
 
 function deriveAppTitle(userText: string): string {
@@ -386,15 +396,8 @@ router.post("/:id/messages", async (req, res) => {
   };
 
   try {
-    if (isGreeting(content)) {
-      const msg = "Hi — what would you like to work on?";
-      savedContent = msg;
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-    } else if (isDescribeRepoIntent(content)) {
-      const msg = formatRepoDescription();
-      savedContent = msg;
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-    } else if (isExplicitPullIntent(content)) {
+    // Pull first — never fall through to AI for pull requests
+    if (isExplicitPullIntent(content)) {
       if (!isPersisted) {
         const msg = "Log in in **Settings**, then say **pull** again.";
         savedContent = msg;
@@ -417,6 +420,14 @@ router.post("/:id/messages", async (req, res) => {
         savedContent += (savedContent ? "\n\n" : "") + msg;
         if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
       }
+    } else if (isGreeting(content)) {
+      const msg = "Hi — what would you like to work on?";
+      savedContent = msg;
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+    } else if (isDescribeRepoIntent(content)) {
+      const msg = formatRepoDescription();
+      savedContent = msg;
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
     } else if (getAiProvider() === "local") {
       const localTools = toLocalToolDefinitions(
         forgeToolDeclarations as unknown as Array<{
@@ -520,7 +531,9 @@ router.post("/:id/messages", async (req, res) => {
           res.write(`data: ${JSON.stringify({ content: finalText })}\n\n`);
         }
       } else if (!savedContent.trim()) {
-        const fallback = "What would you like to do next?";
+        const fallback = isExplicitPullIntent(content)
+          ? "Pull did not complete. Say: pull"
+          : "What would you like to do next?";
         savedContent = fallback;
         if (!res.writableEnded) {
           res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
