@@ -13,12 +13,31 @@ import { getAiProvider } from "../../lib/ai-provider";
 
 const router: IRouter = Router();
 
-/** How many past messages to feed the model (strong memory). */
 const HISTORY_LIMIT = 40;
-/** Max characters per history message (keep early context, trim long tool dumps). */
 const HISTORY_MSG_CHARS = 4000;
 const CURRENT_MSG_CHARS = 8000;
 const MAX_TOOL_TURNS = 8;
+
+/**
+ * Only true for clear pull/import intent — not describe, not "make a site".
+ * This is action routing to the correct tool, not a canned chat template.
+ */
+function isExplicitPullIntent(userText: string): boolean {
+  const t = userText.trim().toLowerCase();
+  if (!t || t.length > 120) return false;
+  // "pull" / "pull again" / "clone" / "import" alone
+  if (/^(please\s+)?(pull|clone|import)(\s+(again|it|now))?\.?$/i.test(t)) return true;
+  // "pull from my connected repo", "load my repo", etc.
+  if (
+    /^(please\s+)?(pull|clone|import|fetch|load)\s+(from\s+)?(my\s+)?(connected\s+)?(repo|repository|github)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/^pull from (my )?(connected )?(repo|github)/i.test(t)) return true;
+  return false;
+}
 
 function deriveAppTitle(userText: string): string {
   const t = userText.trim().replace(/\s+/g, " ");
@@ -92,14 +111,12 @@ MEMORY (critical):
 - If they say "again", "that", "the repo", or "fix it", use prior context — do not ask them to repeat everything.
 
 HOW TO RESPOND:
-- Answer in natural language. There are no magic trigger phrases that force a canned reply. Understand intent from the whole message and history.
+- Answer in natural language. No canned template replies.
 - If they want to chat, explain, or describe something — reply in text. Do not call tools unless needed.
-- If they want to build or change an app — use tools (write_file, run_preview, etc.).
-- PULL / REPO (important): When the user asks to pull — including short messages like "pull", "pull again", "pull from my repo", "pull my connected repo", "load the repo", or "import from GitHub" — you MUST call the import_github_repo tool (then run_preview when files are ready). Do not only talk about pulling; actually call the tool.
-- If they ask what the repo is or to describe it — answer in text; do not pull unless they also asked to pull.
-- If they want a monorepo package built for preview — use build_workspace_app (e.g. package "axis-preview").
-- Prefer one complete index.html with inline CSS/JS for simple apps. Mobile-friendly (viewport, full width).
-- Do not invent a generic "hi" placeholder page. Build what they asked for.
+- If they want to build or change an app — use write_file / run_preview (always include non-empty content for write_file).
+- If they want to pull their connected GitHub repo, call import_github_repo then run_preview. Never invent a new website when they asked to pull.
+- Never call write_file with empty content.
+- Prefer one complete index.html with inline CSS/JS for simple apps. Mobile-friendly.
 - Every tool call needs a short summary argument.
 - After writing files, call run_preview so they can press Run.
 ${filesBlock}${historyBlock}
@@ -117,6 +134,32 @@ function summarizeHistoryForPrompt(history: Array<{ role: string; content: strin
       return `${role}: ${body}`;
     })
     .join("\n");
+}
+
+function formatPullResult(output: unknown, error?: string): string {
+  if (error) return `Could not pull the connected repo: ${error}`;
+  const o = (output ?? {}) as {
+    imported?: number;
+    promotedFrom?: string;
+    builtFromMonorepo?: { package?: string; files?: number; buildMs?: number } | null;
+    buildError?: string | null;
+    hasIndexHtml?: boolean;
+    files?: string[];
+  };
+  if (o.builtFromMonorepo?.package) {
+    const b = o.builtFromMonorepo;
+    return `Pulled and built **${b.package}** (${b.files ?? "?"} files${b.buildMs != null ? `, ${b.buildMs}ms` : ""}). Press **Run** to preview.`;
+  }
+  if (o.buildError) {
+    return `Pulled **${o.imported ?? 0}** file(s), but the monorepo build failed: ${String(o.buildError).slice(0, 400)}. You can try building a specific package next.`;
+  }
+  if (o.hasIndexHtml) {
+    return o.promotedFrom
+      ? `Pulled **${o.imported ?? 0}** file(s). Promoted **${o.promotedFrom}** → **index.html**. Press **Run** to preview.`
+      : `Pulled **${o.imported ?? 0}** file(s) from your connected repo. Press **Run** to preview.`;
+  }
+  const names = (o.files ?? []).slice(0, 12).join(", ") || "none listed";
+  return `Pulled files (${names}) but there is no root index.html yet.`;
 }
 
 router.get("/", async (req, res) => {
@@ -327,7 +370,29 @@ router.post("/:id/messages", async (req, res) => {
   };
 
   try {
-    if (getAiProvider() === "local") {
+    // Clear pull intent → import_github_repo only (model was inventing write_file websites)
+    if (isExplicitPullIntent(content)) {
+      if (!isPersisted) {
+        const msg =
+          "Log in and connect GitHub in **Settings** (PAT with repo scope), then say **pull** again.";
+        savedContent = msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+      } else {
+        const importResult = await runTool("import_github_repo", {
+          path: "",
+          summary: "Pulled connected repo",
+        });
+        if (!importResult.error) {
+          const out = importResult.output as { hasIndexHtml?: boolean } | undefined;
+          if (out?.hasIndexHtml) {
+            await runTool("run_preview", { summary: "Preview ready" });
+          }
+        }
+        const msg = formatPullResult(importResult.output, importResult.error);
+        savedContent += (savedContent ? "\n\n" : "") + msg;
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+      }
+    } else if (getAiProvider() === "local") {
       const localTools = toLocalToolDefinitions(
         forgeToolDeclarations as unknown as Array<{
           name: string;
@@ -364,6 +429,20 @@ router.post("/:id/messages", async (req, res) => {
         }
 
         const args = (decision.arguments ?? {}) as Record<string, unknown>;
+        // Guard: never allow empty write_file content
+        if (decision.name === "write_file" && !String(args.content ?? "").trim()) {
+          workingMessages.push({
+            role: "assistant",
+            content: JSON.stringify({ action: "tool", name: decision.name, arguments: args }),
+          });
+          workingMessages.push({
+            role: "user",
+            content:
+              "Tool error: write_file requires non-empty content. If the user asked to pull a repo, call import_github_repo instead of write_file.",
+          });
+          continue;
+        }
+
         const result = await runTool(decision.name, args);
 
         workingMessages.push({
@@ -405,8 +484,7 @@ router.post("/:id/messages", async (req, res) => {
           res.write(`data: ${JSON.stringify({ content: finalText })}\n\n`);
         }
       } else if (!savedContent.trim()) {
-        const fallback =
-          "I'm here — tell me what you want to build, change, or load from your connected repo. I'll use the full chat history, so you don't need special phrases.";
+        const fallback = "What would you like to do next?";
         savedContent = fallback;
         if (!res.writableEnded) {
           res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
@@ -414,7 +492,7 @@ router.post("/:id/messages", async (req, res) => {
       }
     } else {
       const msg =
-        "Forge is set to the local AI path for building apps. If this message appears, switch AI provider to local or try again.";
+        "Forge is set to the local AI path for building apps. Switch AI provider to local or try again.";
       savedContent = msg;
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
