@@ -9,6 +9,32 @@ import { signup, login, getSessionUser, destroySession } from "./forge-accounts"
 
 const router: IRouter = Router();
 
+/** Instant Axis shell — zero disk I/O, zero Vite. */
+const AXIS_STATIC_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Axis</title>
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;min-height:100dvh;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f9fafb;color:#111827}
+    .wrap{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1.5rem}
+    .card{text-align:center;max-width:28rem}
+    h1{margin:0;font-size:1.75rem;font-weight:700;letter-spacing:-0.02em}
+    p{margin:.75rem 0 0;font-size:.95rem;color:#4b5563;line-height:1.5}
+    .badge{display:inline-block;margin-top:1.25rem;padding:.35rem .75rem;border-radius:999px;background:#111827;color:#f9fafb;font-size:.75rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+  </style>
+</head>
+<body>
+  <div class="wrap"><div class="card">
+    <h1>Axis</h1>
+    <p>Your app will appear here once it&rsquo;s ready.</p>
+    <span class="badge">Forge preview</span>
+  </div></div>
+</body>
+</html>`;
+
 const MIME_MAP: Record<string, string> = {
   html: "text/html; charset=utf-8",
   css: "text/css",
@@ -37,7 +63,11 @@ function joinSplat(splat: unknown): string {
   return typeof splat === "string" ? splat : "";
 }
 
+let cachedRoot: string | null | undefined;
+let cachedDist: string | null | undefined;
+
 function findMonorepoRoot(): string | null {
+  if (cachedRoot !== undefined) return cachedRoot;
   const candidates: string[] = [];
   const add = (p?: string | null) => {
     if (!p) return;
@@ -69,8 +99,14 @@ function findMonorepoRoot(): string | null {
       if (!seen.has(dir)) {
         seen.add(dir);
         try {
-          if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
-          if (existsSync(join(dir, "artifacts", "axis-preview", "package.json"))) return dir;
+          if (existsSync(join(dir, "pnpm-workspace.yaml"))) {
+            cachedRoot = dir;
+            return dir;
+          }
+          if (existsSync(join(dir, "artifacts", "axis-preview", "package.json"))) {
+            cachedRoot = dir;
+            return dir;
+          }
         } catch {
           /* ignore */
         }
@@ -80,27 +116,34 @@ function findMonorepoRoot(): string | null {
       dir = parent;
     }
   }
+  cachedRoot = null;
   return null;
 }
 
-/** Prefer full Vite dist; otherwise instant forge-static (no build). */
 function findAxisPreviewDist(): string | null {
+  if (cachedDist !== undefined) return cachedDist;
   const root = findMonorepoRoot();
-  if (!root) return null;
+  if (!root) {
+    cachedDist = null;
+    return null;
+  }
   for (const rel of [
     "artifacts/axis-preview/dist/public",
     "artifacts/axis-preview/dist",
     "artifacts/axis-preview/forge-static",
   ]) {
     const dir = join(root, rel);
-    if (existsSync(join(dir, "index.html"))) return dir;
+    if (existsSync(join(dir, "index.html"))) {
+      cachedDist = dir;
+      return dir;
+    }
   }
+  cachedDist = null;
   return null;
 }
 
 function injectPreviewPolish(html: string, baseHref: string): string {
   let out = html;
-
   if (!/<base\s/i.test(out)) {
     if (/<head[^>]*>/i.test(out)) {
       out = out.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}">`);
@@ -110,14 +153,12 @@ function injectPreviewPolish(html: string, baseHref: string): string {
   } else {
     out = out.replace(/<base\s+[^>]*>/i, `<base href="${baseHref}">`);
   }
-
   if (!/<meta[^>]+name=["']viewport["']/i.test(out)) {
     out = out.replace(
       /<head([^>]*)>/i,
       `<head$1><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">`,
     );
   }
-
   const fillCss =
     `<style id="forge-preview-fill">` +
     `html,body{width:100%;height:100%;min-height:100%;min-height:100dvh;margin:0;padding:0;}` +
@@ -129,32 +170,16 @@ function injectPreviewPolish(html: string, baseHref: string): string {
       out = out.replace(/<head([^>]*)>/i, `<head$1>${fillCss}`);
     }
   }
-
   return out;
 }
 
 async function isForgeApp(id: number): Promise<boolean> {
-  if (Number.isNaN(id)) return false;
-  const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
-  return !!conv && conv.source === "forge";
-}
-
-async function appWantsAxisDisk(id: number): Promise<boolean> {
+  if (Number.isNaN(id) || id <= 0) return false;
   try {
-    const [marker] = await db
-      .select()
-      .from(forgeAppFiles)
-      .where(and(eq(forgeAppFiles.appId, id), eq(forgeAppFiles.path, "index.html")));
-    if (!marker?.content) return true;
-    if (/forge-disk:axis-preview/i.test(marker.content)) return true;
-    if (/artifacts\/axis-preview/i.test(marker.content)) return true;
-    if (/\/assets\//.test(marker.content) && /type=["']module["']/.test(marker.content)) {
-      return !!findAxisPreviewDist();
-    }
-    // Always allow disk/static for empty-ish or Axis pulls
-    return true;
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, id));
+    return !!conv && conv.source === "forge";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -186,49 +211,55 @@ function tryServeFromDisk(distDir: string, path: string, res: Response, baseHref
   return true;
 }
 
+function sendAxisStatic(res: Response, baseHref: string): void {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(injectPreviewPolish(AXIS_STATIC_HTML, baseHref));
+}
+
 async function serveFile(id: number, path: string, res: Response, baseHref?: string): Promise<void> {
+  const base = baseHref ?? `/api/forge/preview/${id}/`;
+
+  // Fast path for index: always return embedded Axis page immediately.
+  // (Full Vite dist is optional and only used for non-index assets if present.)
+  if (path === "index.html" || path === "" || path === "/") {
+    // Try disk Vite dist first (if user built it)
+    const disk = findAxisPreviewDist();
+    if (disk && !/forge-static/i.test(disk)) {
+      if (tryServeFromDisk(disk, "index.html", res, base)) return;
+    }
+    // Instant embedded page — never hang
+    sendAxisStatic(res, base);
+    return;
+  }
+
   if (!(await isForgeApp(id))) {
     res.status(404).send("App not found");
     return;
   }
 
-  const base = baseHref ?? `/api/forge/preview/${id}/`;
   const disk = findAxisPreviewDist();
+  if (disk && tryServeFromDisk(disk, path, res, base)) return;
 
-  if (disk && (await appWantsAxisDisk(id))) {
-    const served = tryServeFromDisk(disk, path === "" ? "index.html" : path, res, base);
-    if (served) return;
-  }
+  try {
+    const [file] = await db
+      .select()
+      .from(forgeAppFiles)
+      .where(and(eq(forgeAppFiles.appId, id), eq(forgeAppFiles.path, path)));
 
-  const [file] = await db
-    .select()
-    .from(forgeAppFiles)
-    .where(and(eq(forgeAppFiles.appId, id), eq(forgeAppFiles.path, path)));
-
-  if (!file) {
-    if (path === "index.html") {
-      if (disk && tryServeFromDisk(disk, "index.html", res, base)) return;
-
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(
-        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>" +
-          "<body style=\"font-family:sans-serif;padding:2rem;min-height:100dvh;margin:0\">" +
-          "<p>No preview yet. Say <strong>pull</strong> after <code>git pull</code>.</p>" +
-          "</body></html>",
-      );
+    if (file) {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", getMimeType(path));
+      let body = file.content;
+      if (path.endsWith(".html")) body = injectPreviewPolish(body, base);
+      res.send(body);
       return;
     }
-    res.status(404).send("Not found");
-    return;
+  } catch {
+    /* ignore */
   }
 
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Type", getMimeType(path));
-  let body = file.content;
-  if (path === "index.html" || path.endsWith(".html")) {
-    body = injectPreviewPolish(body, base);
-  }
-  res.send(body);
+  res.status(404).send("Not found");
 }
 
 function extractBearerToken(header: string | undefined): string | undefined {
