@@ -27,7 +27,7 @@ interface SettingsPanelProps {
 }
 
 // Bump this on every release — shown at the bottom of the Settings panel.
-const APP_VERSION = "v1";
+const APP_VERSION = "v1.1";
 
 function getStoredTheme(): "light" | "dark" {
   return (localStorage.getItem("theme") as "light" | "dark") ?? "light";
