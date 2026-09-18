@@ -92,10 +92,11 @@ MEMORY (critical):
 - If they say "again", "that", "the repo", or "fix it", use prior context — do not ask them to repeat everything.
 
 HOW TO RESPOND:
-- Answer in natural language. There are NO magic phrases. Understand intent from the whole message and history.
+- Answer in natural language. There are no magic trigger phrases that force a canned reply. Understand intent from the whole message and history.
 - If they want to chat, explain, or describe something — reply in text. Do not call tools unless needed.
 - If they want to build or change an app — use tools (write_file, run_preview, etc.).
-- If they want to load their connected GitHub repo — use import_github_repo, then run_preview when ready.
+- PULL / REPO (important): When the user asks to pull — including short messages like "pull", "pull again", "pull from my repo", "pull my connected repo", "load the repo", or "import from GitHub" — you MUST call the import_github_repo tool (then run_preview when files are ready). Do not only talk about pulling; actually call the tool.
+- If they ask what the repo is or to describe it — answer in text; do not pull unless they also asked to pull.
 - If they want a monorepo package built for preview — use build_workspace_app (e.g. package "axis-preview").
 - Prefer one complete index.html with inline CSS/JS for simple apps. Mobile-friendly (viewport, full width).
 - Do not invent a generic "hi" placeholder page. Build what they asked for.
@@ -106,8 +107,7 @@ ${opts.isPersisted ? "" : "\nUser is not logged in — ask them to log in in Set
 }
 
 function summarizeHistoryForPrompt(history: Array<{ role: string; content: string }>): string {
-  // Compact digest of older messages so the model keeps long-thread awareness
-  const prior = history.slice(0, -1); // exclude message just saved as current user turn if duplicated
+  const prior = history.slice(0, -1);
   if (prior.length === 0) return "";
   return prior
     .slice(-20)
@@ -260,12 +260,8 @@ router.post("/:id/messages", async (req, res) => {
     await autoTitleIfDefault(id, content);
   }
 
-  // History for the model: include the new user message + prior turns
   const historyForModel = isPersisted
-    ? [
-        ...history,
-        { role: "user", content },
-      ]
+    ? [...history, { role: "user", content }]
     : [...guestHistory, { role: "user", content }];
 
   const appFiles = isPersisted ? await listAppFilePaths(id) : [];
@@ -349,7 +345,6 @@ router.post("/:id/messages", async (req, res) => {
           }),
         ),
       ];
-      // Ensure latest user text is not over-truncated in the last slot
       if (workingMessages.length > 0) {
         const last = workingMessages[workingMessages.length - 1];
         if (last.role === "user") {
@@ -384,7 +379,6 @@ router.post("/:id/messages", async (req, res) => {
           content: buildLocalToolResultMessage(decision.name, result),
         });
 
-        // Refresh file list in context after mutating tools
         if (
           decision.name === "write_file" ||
           decision.name === "import_github_repo" ||
@@ -419,8 +413,6 @@ router.post("/:id/messages", async (req, res) => {
         }
       }
     } else {
-      // Non-local: still model-style — no phrase routers. Prefer tools via local path when available.
-      // Fall back to a clear instruction if Gemini path isn't fully wired for Forge tools here.
       const msg =
         "Forge is set to the local AI path for building apps. If this message appears, switch AI provider to local or try again.";
       savedContent = msg;
