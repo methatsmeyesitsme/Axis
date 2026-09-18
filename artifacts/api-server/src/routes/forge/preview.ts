@@ -83,11 +83,15 @@ function findMonorepoRoot(): string | null {
   return null;
 }
 
-/** Live disk dist for axis-preview — no DB round-trip for multi‑MB JS. */
+/** Prefer full Vite dist; otherwise instant forge-static (no build). */
 function findAxisPreviewDist(): string | null {
   const root = findMonorepoRoot();
   if (!root) return null;
-  for (const rel of ["artifacts/axis-preview/dist/public", "artifacts/axis-preview/dist"]) {
+  for (const rel of [
+    "artifacts/axis-preview/dist/public",
+    "artifacts/axis-preview/dist",
+    "artifacts/axis-preview/forge-static",
+  ]) {
     const dir = join(root, rel);
     if (existsSync(join(dir, "index.html"))) return dir;
   }
@@ -135,24 +139,22 @@ async function isForgeApp(id: number): Promise<boolean> {
   return !!conv && conv.source === "forge";
 }
 
-/** True if this app is meant to show the monorepo axis-preview build. */
 async function appWantsAxisDisk(id: number): Promise<boolean> {
   try {
     const [marker] = await db
       .select()
       .from(forgeAppFiles)
       .where(and(eq(forgeAppFiles.appId, id), eq(forgeAppFiles.path, "index.html")));
-    if (!marker?.content) return true; // empty app → still try disk if present
+    if (!marker?.content) return true;
     if (/forge-disk:axis-preview/i.test(marker.content)) return true;
     if (/artifacts\/axis-preview/i.test(marker.content)) return true;
-    // Built vite index with assets — may have been loaded from disk path earlier
     if (/\/assets\//.test(marker.content) && /type=["']module["']/.test(marker.content)) {
-      // Prefer disk when available (fresher, faster)
       return !!findAxisPreviewDist();
     }
-    return false;
+    // Always allow disk/static for empty-ish or Axis pulls
+    return true;
   } catch {
-    return !!findAxisPreviewDist();
+    return true;
   }
 }
 
@@ -174,7 +176,6 @@ function tryServeFromDisk(distDir: string, path: string, res: Response, baseHref
   if (ext === "html" || safe === "index.html" || !safe) {
     let body = readFileSync(full, "utf8");
     body = injectPreviewPolish(body, baseHref);
-    // Fix absolute /assets to base-relative when needed
     body = body.replace(/(href|src)=(["'])\/assets\//g, `$1=$2${baseHref}assets/`);
     res.send(body);
   } else if (["png", "jpg", "jpeg", "gif", "ico", "woff", "woff2"].includes(ext)) {
@@ -194,11 +195,9 @@ async function serveFile(id: number, path: string, res: Response, baseHref?: str
   const base = baseHref ?? `/api/forge/preview/${id}/`;
   const disk = findAxisPreviewDist();
 
-  // Prefer local disk dist for Axis (instant — no multi‑MB DB reads)
   if (disk && (await appWantsAxisDisk(id))) {
     const served = tryServeFromDisk(disk, path === "" ? "index.html" : path, res, base);
     if (served) return;
-    // fall through for paths not in dist
   }
 
   const [file] = await db
@@ -208,28 +207,13 @@ async function serveFile(id: number, path: string, res: Response, baseHref?: str
 
   if (!file) {
     if (path === "index.html") {
-      // Last chance: disk index even without marker
       if (disk && tryServeFromDisk(disk, "index.html", res, base)) return;
 
-      const others = await db
-        .select({ path: forgeAppFiles.path })
-        .from(forgeAppFiles)
-        .where(eq(forgeAppFiles.appId, id));
-      const list =
-        others.length === 0
-          ? "<p>No files are stored for this app yet.</p>"
-          : "<p>Files stored:</p><ul>" +
-            others.map((o) => `<li><code>${o.path}</code></li>`).join("") +
-            "</ul>";
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
         "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>" +
-          "<body style=\"font-family:sans-serif;padding:2rem;color:#666;min-height:100dvh;margin:0\">" +
-          "<p>This app doesn't have an <code>index.html</code> yet.</p>" +
-          list +
-          (disk
-            ? "<p>Local axis-preview dist was found on disk — try <strong>pull</strong> again.</p>"
-            : "<p>Build dist in shell: <code>cd artifacts/axis-preview && pnpm run build</code></p>") +
+          "<body style=\"font-family:sans-serif;padding:2rem;min-height:100dvh;margin:0\">" +
+          "<p>No preview yet. Say <strong>pull</strong> after <code>git pull</code>.</p>" +
           "</body></html>",
       );
       return;
@@ -299,8 +283,7 @@ async function handleAuthRoute(
 
 async function serveIndex(req: Request, res: Response): Promise<void> {
   const id = Number(req.params.id);
-  const baseHref = `/api/forge/preview/${id}/`;
-  await serveFile(id, "index.html", res, baseHref);
+  await serveFile(id, "index.html", res, `/api/forge/preview/${id}/`);
 }
 
 router.get("/:id", serveIndex);
