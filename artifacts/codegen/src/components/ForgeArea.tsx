@@ -117,12 +117,14 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
         const batch = charQueueRef.current.slice(0, 6);
         charQueueRef.current = charQueueRef.current.slice(batch.length);
         setDisplayedContent((prev) => prev + batch);
+        setIsThinking(false);
       } else if (streamDoneRef.current) {
         clearInterval(displayTimerRef.current!);
         displayTimerRef.current = null;
         streamDoneRef.current = false;
         const tid = finalizeTargetRef.current;
         setIsStreaming(false);
+        setIsThinking(false);
         setOptimisticUserMessage(null);
         setToolSteps([]);
         streamingJustFinishedRef.current = true;
@@ -239,7 +241,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
       }
       if (!response.body) throw new Error("No response body");
 
-      setIsThinking(false);
+      // Stay in "Thinking" until the first tool call or text arrives
       setIsStreaming(true);
 
       const reader = response.body.getReader();
@@ -261,26 +263,35 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             if (data.content) {
               charQueueRef.current += data.content as string;
               streamingContentRef.current += data.content as string;
+              setIsThinking(false);
             }
             if (data.toolStart) {
               const { id: toolId, summary } = data.toolStart as { id: string; summary: string };
+              setIsThinking(false);
               setToolSteps((prev) => [...prev, { id: toolId, summary, status: "working" }]);
             }
             if (data.toolDone) {
               const { id: toolId } = data.toolDone as { id: string; summary: string };
               setToolSteps((prev) => prev.map((s) => (s.id === toolId ? { ...s, status: "done" } : s)));
+              // Between tools / before the next reply — show Thinking again
+              setIsThinking(true);
             }
             if (data.toolError) {
               const { id: toolId } = data.toolError as { id: string; summary: string; error: string };
               setToolSteps((prev) => prev.map((s) => (s.id === toolId ? { ...s, status: "error" } : s)));
+              setIsThinking(true);
+            }
+            if (data.status === "working" || data.status === "thinking") {
+              setIsThinking(true);
             }
             if (data.error) {
               const errorText = `Sorry, something went wrong: ${data.error}`;
               charQueueRef.current += errorText;
               streamingContentRef.current += errorText;
+              setIsThinking(false);
               done = true;
             }
-            if (data.done) done = true;
+            if (data.done) { setIsThinking(false); done = true; }
           } catch { /* ignore */ }
         }
       }
@@ -335,6 +346,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
 
   const showOptimistic = optimisticUserMessage !== null && (isGuest || serverMessages.length <= optimisticBaseline);
   const showBubble = isStreaming || displayedContent.length > 0 || toolSteps.length > 0;
+  const hasActiveTool = toolSteps.some((s) => s.status === "working");
 
   const composer = (placeholder: string) => (
     <div data-keyboard-composer className="p-4 border-t bg-background shadow-sm shrink-0">
@@ -355,22 +367,22 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isThinking}
+            disabled={isThinking && !isStreaming}
           />
           <div className="flex items-center justify-end px-3 pb-2.5 pt-1">
             <Button
-              className={`h-8 w-8 rounded-lg shrink-0 transition-all duration-200 ${isStreaming ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
+              className={`h-8 w-8 rounded-lg shrink-0 transition-all duration-200 ${isStreaming || isThinking ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"}`}
               onClick={handleSend}
-              disabled={isThinking || (!input.trim() && !isStreaming)}
+              disabled={(!input.trim() && !isStreaming && !isThinking)}
               size="icon"
             >
-              {isThinking ? (
+              {isThinking && !isStreaming && !hasActiveTool ? (
                 <div className="flex gap-0.5">
                   <span className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0ms]" />
                   <span className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:150ms]" />
                   <span className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:300ms]" />
                 </div>
-              ) : isStreaming ? (
+              ) : isStreaming || isThinking ? (
                 <Square className="w-4 h-4 fill-white" />
               ) : (
                 <Send className="w-4 h-4" />
@@ -438,7 +450,7 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             {showOptimistic && (
               <MessageBubble role="user" content={optimisticUserMessage!} />
             )}
-            {isThinking && <AIThinkingRow text="Working" />}
+            {isThinking && !hasActiveTool && <AIThinkingRow text="Thinking" />}
             {showBubble && (
               <div ref={streamingBubbleRef} className="flex flex-col gap-2">
                 {toolSteps.length > 0 && (() => {
@@ -453,29 +465,20 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
                         <div className="ml-11">
                           <button
                             type="button"
-                            onClick={() => setShowToolHistory((open) => !open)}
-                            className="flex items-center gap-1.5 text-left text-sm"
-                            aria-expanded={showToolHistory}
+                            onClick={() => setShowToolHistory((v) => !v)}
+                            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
                           >
-                            <ChevronDown
-                              className={`w-3.5 h-3.5 text-primary transition-transform ${showToolHistory ? "rotate-180" : ""}`}
-                            />
                             <ShimmerLabel text={firstCompleted.summary} />
                             {completedSteps.length > 1 && (
-                              <span className="text-xs text-muted-foreground">
-                                +{completedSteps.length - 1}
-                              </span>
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showToolHistory ? "rotate-180" : ""}`} />
                             )}
                           </button>
-                          {showToolHistory && (
-                            <div className="mt-1.5 ml-5 flex flex-col gap-1 border-l border-primary/20 pl-3">
-                              {completedSteps.map((step) => (
-                                <div key={step.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                    step.status === "error" ? "bg-destructive" : "bg-primary/60"
-                                  }`} />
-                                  <span>{step.summary}</span>
-                                </div>
+                          {showToolHistory && completedSteps.length > 1 && (
+                            <div className="mt-1.5 flex flex-col gap-1">
+                              {completedSteps.slice(1).map((step) => (
+                                <span key={step.id} className="text-xs text-muted-foreground">
+                                  {step.status === "error" ? `✗ ${step.summary}` : `✓ ${step.summary}`}
+                                </span>
                               ))}
                             </div>
                           )}
@@ -491,13 +494,13 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
             )}
           </div>
         </div>
+
         {showScrollButton && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:bg-primary/90 transition-all animate-in fade-in slide-in-from-bottom-2 duration-200"
+            className="absolute bottom-4 right-6 z-10 w-9 h-9 rounded-full bg-card border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
           >
-            <ChevronDown className="w-3.5 h-3.5" />
-            Scroll to latest
+            <ChevronDown className="w-4 h-4" />
           </button>
         )}
       </div>
@@ -505,23 +508,21 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
       {composer("Describe the app you want to build...")}
 
       {showPreview && previewUrl && createPortal(
-        <div className="fixed inset-0 z-[100] bg-background flex flex-col overflow-hidden" style={{ touchAction: "pan-y" }}>
-          <div className="h-12 shrink-0 flex items-center justify-between px-3 border-b bg-card">
+        <div className="fixed inset-0 z-[100] bg-background flex flex-col">
+          <div className="h-12 border-b flex items-center justify-between px-3 shrink-0 bg-card">
             <button
               type="button"
               onClick={() => setShowPreview(false)}
-              className="flex items-center justify-center w-10 h-10 rounded-full hover:bg-muted transition-colors"
-              title="Close preview"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               aria-label="Close preview"
             >
               <X className="w-5 h-5" />
             </button>
-            <span className="text-sm font-medium text-muted-foreground truncate px-2">Preview</span>
+            <span className="text-sm font-medium">Preview</span>
             <button
               type="button"
               onClick={handleOpenInBrowser}
-              className="flex items-center justify-center w-10 h-10 rounded-full hover:bg-muted transition-colors"
-              title="Open in browser"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               aria-label="Open in browser"
             >
               <Compass className="w-5 h-5" />
@@ -530,12 +531,11 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
           <iframe
             src={previewUrl}
             title="App preview"
-            className="flex-1 border-0 bg-white"
-            style={{ width: "100%", maxWidth: "100%" }}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+            className="flex-1 w-full border-0 bg-white"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
           />
         </div>,
-        document.body
+        document.body,
       )}
     </div>
   );
