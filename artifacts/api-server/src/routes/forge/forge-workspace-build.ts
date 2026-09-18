@@ -1,12 +1,9 @@
 /**
  * Load a Vite/React package into forgeAppFiles for static preview.
- *
- * Hard rule: the HTTP request path must finish in ~15s. A full axis-preview
- * Vite build can take minutes — so by default we ONLY reuse an existing dist.
- * Cold compile is opt-in (forceCompile) with a 12s kill switch.
+ * Default = reuse local dist only (seconds). Never hang on Vite in chat.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { join, relative, dirname } from "path";
+import { join, relative, dirname, resolve } from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { db, forgeAppFiles } from "@workspace/db";
@@ -21,37 +18,54 @@ const DIST_CACHE_MS = 30 * 60 * 1000;
 
 function findMonorepoRoot(): string | null {
   const candidates: string[] = [];
-  const seeds = [process.cwd()];
+  const add = (p: string | undefined | null) => {
+    if (!p) return;
+    try {
+      candidates.push(resolve(p));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  add(process.cwd());
   try {
     const here = typeof __dirname !== "undefined" ? __dirname : dirname(fileURLToPath(import.meta.url));
-    seeds.push(here);
+    add(here);
   } catch {
     /* ignore */
   }
-  for (const seed of seeds) {
+  for (const envKey of ["REPL_HOME", "HOME", "PWD", "PROJECT_ROOT"]) {
+    add(process.env[envKey]);
+    if (process.env[envKey]) add(join(process.env[envKey]!, "workspace"));
+  }
+  for (const p of [
+    "/home/runner/workspace",
+    "/home/runner",
+    "/home/user/workspace",
+    "/workspace",
+    "/app",
+  ]) {
+    add(p);
+  }
+
+  const expanded: string[] = [];
+  for (const seed of candidates) {
     let dir = seed;
-    for (let i = 0; i < 12; i++) {
-      candidates.push(dir);
+    for (let i = 0; i < 14; i++) {
+      expanded.push(dir);
       const parent = dirname(dir);
       if (parent === dir) break;
       dir = parent;
     }
   }
-  for (const envKey of ["REPL_HOME", "HOME", "PWD"]) {
-    const v = process.env[envKey];
-    if (v) {
-      candidates.push(v);
-      candidates.push(join(v, "workspace"));
-    }
-  }
-  candidates.push("/home/runner/workspace", "/home/runner", "/home/user/workspace", "/workspace");
 
   const seen = new Set<string>();
-  for (const c of candidates) {
+  for (const c of expanded) {
     if (!c || seen.has(c)) continue;
     seen.add(c);
     try {
       if (existsSync(join(c, "pnpm-workspace.yaml"))) return c;
+      if (existsSync(join(c, "artifacts", "axis-preview", "package.json"))) return c;
     } catch {
       /* ignore */
     }
@@ -271,10 +285,6 @@ export type BuildResult =
     }
   | { ok: false; error: string; packages?: string[]; buildMs?: number; root?: string | null };
 
-/**
- * Load package for Forge preview. Default = dist-only (seconds).
- * Set forceCompile=true only for explicit rebuild attempts (12s max).
- */
 export async function buildWorkspacePackage(
   appId: number,
   packageHint?: string,
@@ -288,7 +298,7 @@ export async function buildWorkspacePackage(
       ok: false,
       buildMs: Date.now() - started,
       root: null,
-      error: `Could not find Axis monorepo (no pnpm-workspace.yaml). cwd=${process.cwd()}.`,
+      error: `Could not find Axis monorepo near server (cwd=${process.cwd()}).`,
     };
   }
 
@@ -315,7 +325,6 @@ export async function buildWorkspacePackage(
 
   const basePath = `/api/forge/preview/${appId}/`;
 
-  // Always try cache + disk first (target: under 1–3s)
   const tryLoad = async (distDir: string, reused: boolean): Promise<BuildResult | null> => {
     if (!distLooksBuilt(distDir)) return null;
     const loaded = await loadDistIntoApp(appId, distDir, basePath);
@@ -345,21 +354,19 @@ export async function buildWorkspacePackage(
     if (hit) return hit;
   }
 
-  // No dist — do NOT hang on a multi-minute Vite build during chat
   if (!forceCompile) {
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
       error:
-        `No built dist for ${target.relativeDir} yet. In the Replit shell run once:\n` +
+        `No built dist at ${target.dir}/dist (or dist/public). In shell:\n` +
         `  cd ${target.relativeDir} && pnpm run build\n` +
-        `Then say pull / build again — loading dist takes a few seconds (not minutes).`,
+        `Then pull again (loads in a few seconds).`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
 
-  // Opt-in cold compile with hard 12s limit
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: process.env.PORT || "5000",
@@ -395,7 +402,7 @@ export async function buildWorkspacePackage(
       root,
       error:
         build.code === 124
-          ? `Vite cannot finish ${target.relativeDir} in 12s. Run in shell: cd ${target.relativeDir} && pnpm run build — then pull again (instant).`
+          ? `Vite timed out for ${target.relativeDir}. Use shell build, then pull.`
           : `Build failed (${build.ms}ms): ${errTail || "non-zero exit"}`,
       packages: packages.map((p) => p.relativeDir),
     };
@@ -407,7 +414,7 @@ export async function buildWorkspacePackage(
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error: `Build exited 0 but no dist/index.html under ${target.relativeDir}.`,
+      error: `Build exited 0 but no dist under ${target.relativeDir}.`,
     };
   }
 
@@ -418,7 +425,7 @@ export async function buildWorkspacePackage(
     ok: false,
     buildMs: Date.now() - started,
     root,
-    error: `Dist at ${distDir} could not be loaded into the app.`,
+    error: `Dist at ${distDir} could not be loaded.`,
   };
 }
 
