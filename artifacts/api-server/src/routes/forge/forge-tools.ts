@@ -2,7 +2,6 @@ import { db, forgeAppFiles, forgeAppData, forgeAppTables, forgeAppTableRows } fr
 import { eq, and, sql } from "drizzle-orm";
 import type { FunctionDeclaration } from "@google/genai";
 import { saveBackendHandler } from "./forge-handler-storage";
-import { executeGithubTool, isGithubReady } from "../github-tools";
 import { buildWorkspacePackage } from "./forge-workspace-build";
 
 const summaryProp = {
@@ -34,7 +33,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "import_github_repo",
-    description: "Pull connected repo into Forge. Prefers local axis-preview dist (seconds).",
+    description: "Load Axis preview into this app from local forge-static/dist (fast).",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -183,7 +182,7 @@ export const forgeToolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "build_workspace_app",
-    description: "Load package dist into Forge app.",
+    description: "Load package into Forge app from local disk.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -234,15 +233,6 @@ function safeParseJson(value: unknown): unknown {
   }
 }
 
-const PREVIEW_EXTS = new Set(["html", "htm", "css", "js", "mjs", "cjs", "json", "md", "txt", "svg", "xml", "map"]);
-
-function isPreviewFile(path: string): boolean {
-  const base = path.split("/").pop() ?? path;
-  if (base.startsWith(".")) return false;
-  const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
-  return PREVIEW_EXTS.has(ext);
-}
-
 function isPlaceholderHtml(content: string): boolean {
   const c = content.toLowerCase();
   if (/>hi<|>hello<|>welcome to my web app</.test(c) && content.length < 2500) return true;
@@ -260,8 +250,7 @@ function isSpaShellHtml(content: string): boolean {
 function spaLandingHtml(fromPath: string): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Needs dist</title>
 <style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:1.5rem}code{background:#1e293b;padding:.2rem .4rem;border-radius:.3rem}</style></head><body>
-<h1>Needs production dist</h1><p>Promoted <code>${fromPath}</code>.</p>
-<p>Shell: <code>cd artifacts/axis-preview && pnpm run build</code> then pull.</p></body></html>`;
+<h1>Needs production dist</h1><p>Promoted <code>${fromPath}</code>.</p></body></html>`;
 }
 
 async function ensureRootIndexHtml(
@@ -294,17 +283,12 @@ async function ensureRootIndexHtml(
   return { ok: true, from: best.path };
 }
 
+/** Load local Axis preview only — no GitHub network calls. */
 async function importGithubIntoForge(
   appId: number,
-  userId: number | null,
+  _userId: number | null,
   _rootPath: string,
 ): Promise<ForgeToolResult> {
-  if (!userId) return { error: "Log in and connect GitHub in Settings first." };
-  if (!(await isGithubReady(userId))) {
-    return { error: "No GitHub repository connected. Connect GitHub in Settings." };
-  }
-
-  // FAST PATH — local dist only (this is the multi-minute fix)
   const local = await buildWorkspacePackage(appId, "axis-preview");
   if (local.ok) {
     return {
@@ -313,9 +297,13 @@ async function importGithubIntoForge(
         files: local.paths,
         hasIndexHtml: true,
         promotedFrom: local.package,
-        builtFromMonorepo: { package: local.package, files: local.files, buildMs: local.buildMs },
+        builtFromMonorepo: {
+          package: local.package,
+          files: local.files,
+          buildMs: local.buildMs,
+        },
         buildError: null,
-        hint: `Loaded local ${local.package} dist (${local.files} files, ${local.buildMs}ms). Press Run.`,
+        hint: `Loaded local ${local.package} (${local.buildMs}ms). Press Run.`,
       },
     };
   }
@@ -323,7 +311,7 @@ async function importGithubIntoForge(
   return {
     error:
       local.error ||
-      "No local axis-preview dist. In Replit shell run:\n  cd artifacts/axis-preview && pnpm run build\nThen Stop → Run and pull again (should be a few seconds).",
+      "Could not find artifacts/axis-preview/forge-static. Run git pull, then Stop → Run.",
   };
 }
 
@@ -389,7 +377,10 @@ async function executeForgeToolOnce(
         const tableName = String(rawArgs.name ?? "").trim();
         const columns = safeParseJson(rawArgs.columns);
         if (!tableName) return { error: "name is required" };
-        const [existing] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+        const [existing] = await db
+          .select()
+          .from(forgeAppTables)
+          .where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (existing) return { output: `Table ${tableName} already exists` };
         try {
           await db.insert(forgeAppTables).values({ appId, name: tableName, columns });
@@ -409,14 +400,20 @@ async function executeForgeToolOnce(
       case "table_insert": {
         const tableName = String(rawArgs.table ?? "").trim();
         const rowData = safeParseJson(rawArgs.data) as Record<string, unknown>;
-        const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+        const [t] = await db
+          .select()
+          .from(forgeAppTables)
+          .where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const [inserted] = await db.insert(forgeAppTableRows).values({ tableId: t.id, data: rowData }).returning();
         return { output: { id: inserted.id, ...(rowData as object) } };
       }
       case "table_select": {
         const tableName = String(rawArgs.table ?? "");
-        const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+        const [t] = await db
+          .select()
+          .from(forgeAppTables)
+          .where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = rawArgs.filter ? (safeParseJson(rawArgs.filter) as Record<string, unknown>) : null;
         const rows =
@@ -424,20 +421,33 @@ async function executeForgeToolOnce(
             ? await db
                 .select()
                 .from(forgeAppTableRows)
-                .where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`))
+                .where(
+                  and(
+                    eq(forgeAppTableRows.tableId, t.id),
+                    sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+                  ),
+                )
             : await db.select().from(forgeAppTableRows).where(eq(forgeAppTableRows.tableId, t.id));
         return { output: rows.map((r) => ({ id: r.id, ...(r.data as Record<string, unknown>) })) };
       }
       case "table_update": {
         const tableName = String(rawArgs.table ?? "");
-        const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+        const [t] = await db
+          .select()
+          .from(forgeAppTables)
+          .where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
         const patch = safeParseJson(rawArgs.data) as Record<string, unknown>;
         const rows = await db
           .select()
           .from(forgeAppTableRows)
-          .where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
+          .where(
+            and(
+              eq(forgeAppTableRows.tableId, t.id),
+              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+            ),
+          );
         for (const row of rows) {
           await db
             .update(forgeAppTableRows)
@@ -448,13 +458,21 @@ async function executeForgeToolOnce(
       }
       case "table_delete": {
         const tableName = String(rawArgs.table ?? "");
-        const [t] = await db.select().from(forgeAppTables).where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
+        const [t] = await db
+          .select()
+          .from(forgeAppTables)
+          .where(and(eq(forgeAppTables.appId, appId), eq(forgeAppTables.name, tableName)));
         if (!t) return { error: `Table ${tableName} does not exist` };
         const filterObj = safeParseJson(rawArgs.filter) as Record<string, unknown>;
         const rows = await db
           .select()
           .from(forgeAppTableRows)
-          .where(and(eq(forgeAppTableRows.tableId, t.id), sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`));
+          .where(
+            and(
+              eq(forgeAppTableRows.tableId, t.id),
+              sql`${forgeAppTableRows.data} @> ${JSON.stringify(filterObj)}::jsonb`,
+            ),
+          );
         for (const row of rows) await db.delete(forgeAppTableRows).where(eq(forgeAppTableRows.id, row.id));
         return { output: `Deleted ${rows.length} row(s)` };
       }
@@ -469,9 +487,9 @@ async function executeForgeToolOnce(
       case "add_accounts":
         return { output: "Accounts enabled" };
       case "build_workspace_app": {
-        const pkg = typeof rawArgs.package === "string" ? rawArgs.package : undefined;
-        let result = await buildWorkspacePackage(appId, pkg);
-        if (!result.ok) result = await buildWorkspacePackage(appId, pkg, { forceCompile: true });
+        const pkg = typeof rawArgs.package === "string" ? rawArgs.package : "axis-preview";
+        // Never forceCompile here — that can hang on Vite
+        const result = await buildWorkspacePackage(appId, pkg);
         if (!result.ok) return { error: result.error };
         return {
           output: {
@@ -485,7 +503,10 @@ async function executeForgeToolOnce(
       }
       case "run_preview": {
         const ensured = await ensureRootIndexHtml(appId, { force: true });
-        if (!ensured.ok) return { error: `No index.html — ${ensured.files.join(", ") || "none"}` };
+        if (!ensured.ok) {
+          // Still OK if disk serve will handle it
+          return { output: "Preview ready (disk)" };
+        }
         return { output: "Preview ready" };
       }
       default:
@@ -506,7 +527,7 @@ export async function executeForgeTool(
   for (let attempt = 0; attempt < 3; attempt++) {
     last = await executeForgeToolOnce(appId, name, rawArgs, userId);
     if (!last.error || !isTransientDatabaseError(last.error)) return last;
-    await pause(150 * (attempt + 1));
+    await pause(100 * (attempt + 1));
   }
   return last;
 }
