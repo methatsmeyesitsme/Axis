@@ -153,6 +153,9 @@ export default function ForgeSidebar({
   const [renameDialog, setRenameDialog] = useState<{ id: number; title: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteDialog, setDeleteDialog] = useState<{ id: number } | null>(null);
+  const recentDeleteTimestampsRef = useRef<number[]>([]);
+  const RAPID_DELETE_WINDOW_MS = 60_000;
+  const RAPID_DELETE_THRESHOLD = 3;
 
   const openRename = (id: number, title: string) => {
     setRenameValue(title);
@@ -171,17 +174,35 @@ export default function ForgeSidebar({
     setRenameDialog(null);
   };
 
-  const openDelete = (id: number) => setDeleteDialog({ id });
-
-  const confirmDelete = () => {
-    if (!deleteDialog) return;
-    const { id } = deleteDialog;
+  const performDelete = (id: number) => {
     deleteForgeMutation.mutate({ id }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListForgeConversationsQueryKey() });
         if (activeForgeConversationId === id) onSelectForgeConversation(null);
       },
     });
+    const now = Date.now();
+    recentDeleteTimestampsRef.current = [...recentDeleteTimestampsRef.current, now].filter(
+      (t) => now - t < RAPID_DELETE_WINDOW_MS
+    );
+  };
+
+  const openDelete = (id: number) => {
+    const now = Date.now();
+    const recent = recentDeleteTimestampsRef.current.filter((t) => now - t < RAPID_DELETE_WINDOW_MS);
+    recentDeleteTimestampsRef.current = recent;
+    // After 3 confirmed deletes within the last minute, skip the dialog and delete immediately.
+    // Once a minute passes without hitting that pace again, the window ages out and confirmation returns.
+    if (recent.length >= RAPID_DELETE_THRESHOLD) {
+      performDelete(id);
+      return;
+    }
+    setDeleteDialog({ id });
+  };
+
+  const confirmDelete = () => {
+    if (!deleteDialog) return;
+    performDelete(deleteDialog.id);
     setDeleteDialog(null);
   };
 
