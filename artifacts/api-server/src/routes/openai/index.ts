@@ -56,117 +56,67 @@ function isToolLeak(text: string): boolean {
   return false;
 }
 
-function formatGithubPullAnswer(
-  ownerRepoHint: string,
+async function streamGithubGroundedAnswer(
+  res: import("express").Response,
+  workingMessages: LocalChatMessage[],
+  hint: string,
   items: Array<{ name?: string; path?: string; type?: string }>,
   readmeText: string | null,
   listError: string | null,
-): string {
+  opts: { fast: boolean; maxNewTokens: number; maxMessages: number; maxCharsPerMessage: number },
+): Promise<string> {
   if (listError) {
-    return `I tried to pull **${ownerRepoHint || "the repo"}** but hit an error: ${listError}\n\nIf the repo is private, connect GitHub in Settings and select it, then try again.`;
+    const errMsg = `I tried to reach **${hint || "the repo"}** but hit an error: ${listError}\n\nIf the repo is private, connect GitHub in Settings and select it, then try again.`;
+    await streamText(res, errMsg);
+    return errMsg;
   }
 
-  const files = items.filter((i) => i.type === "file" || !i.type);
-  const dirs = items.filter((i) => i.type === "dir");
-  const topNames = items
-    .map((i) => i.name || (i.path ? i.path.split("/").pop() : ""))
+  const fileList = items
+    .map((i) => `${i.name || i.path || ""}${i.type === "dir" ? "/" : ""}`)
     .filter(Boolean)
-    .slice(0, 40);
+    .slice(0, 60)
+    .join("\n");
 
-  const lines: string[] = [];
-  lines.push(`Here's what I pulled from **${ownerRepoHint || "your repo"}**:`);
-  lines.push("");
+  const context =
+    `Here is the real, current GitHub data for ${hint || "the connected repo"} — use it to actually answer the user's question in your own words. ` +
+    `Don't just dump this listing back at them unless they asked for a file listing; answer what they specifically asked, grounded in this real data.\n\n` +
+    `Root files/folders:\n${fileList || "(the root is empty)"}\n` +
+    (readmeText ? `\nREADME / docs content:\n${readmeText.slice(0, 3000)}` : "\n(no README or docs file was found at the root)");
 
-  if (topNames.length === 0) {
-    lines.push("(No files found at the repo root.)");
-  } else {
-    lines.push("**Top-level items:**");
-    for (const name of topNames) {
-      const isDir = dirs.some((d) => d.name === name || d.path?.endsWith("/" + name) || d.path === name);
-      lines.push(`- ${name}${isDir ? "/" : ""}`);
-    }
+  const grounded: LocalChatMessage[] = [...workingMessages, { role: "user", content: context }];
+
+  let streamed = "";
+  let reply = await localGenerateStreaming(grounded, {
+    ...opts,
+    onToken: (chunk) => {
+      streamed += chunk;
+      if (isToolLeak(streamed) && streamed.length < 80) return;
+      if (!res.writableEnded && chunk) res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+    },
+  });
+
+  if (isToolLeak(reply) || !reply.trim()) {
+    reply = fileList
+      ? `Here's what's actually at the root of ${hint || "the repo"}:\n\n${fileList}`
+      : `${hint || "The repo"} appears to be empty at the root, or I couldn't read it just now — try again in a moment.`;
+    await streamText(res, reply);
   }
-
-  if (readmeText && readmeText.trim()) {
-    const snippet = readmeText.trim().slice(0, 1200);
-    lines.push("");
-    lines.push("**From the README:**");
-    lines.push(snippet + (readmeText.trim().length > 1200 ? "…" : ""));
-  } else {
-    lines.push("");
-    lines.push("No README found at the root. Ask me to open a specific file if you want more detail.");
-  }
-
-  lines.push("");
-  lines.push(`Found ${files.length} file(s) and ${dirs.length} folder(s) at the root.`);
-  return lines.join("\n");
-}
-
-function formatGithubDescribeAnswer(
-  ownerRepoHint: string,
-  items: Array<{ name?: string; path?: string; type?: string }>,
-  readmeText: string | null,
-  listError: string | null,
-): string {
-  if (listError) {
-    return `I couldn't describe **${ownerRepoHint || "the repo"}** because listing failed: ${listError}\n\nConnect GitHub in Settings (PAT with repo scope) and try again.`;
-  }
-
-  const names = items
-    .map((i) => i.name || (i.path ? i.path.split("/").pop() : "") || "")
-    .filter(Boolean)
-    .map((n) => n.toLowerCase());
-
-  const has = (n: string) => names.includes(n) || names.some((x) => x === n || x.startsWith(n + "/"));
-  const parts: string[] = [];
-
-  parts.push(`**${ownerRepoHint || "Your connected repo"}** is a real project I can see via GitHub.`);
-  parts.push("");
-
-  if (has("artifacts") && has("lib") && (has("package.json") || has("pnpm-workspace.yaml"))) {
-    parts.push("It looks like **Axis** — a multi-package TypeScript monorepo (pnpm workspace) with:");
-    parts.push("- **artifacts/** — apps (API server, codegen chat UI, Forge, previews)");
-    parts.push("- **lib/** — shared libraries (local AI, DB, integrations)");
-    parts.push("- Root workspace config (`package.json`, `pnpm-workspace.yaml`, tsconfigs)");
-  } else if (has("package.json") || has("src")) {
-    parts.push("It looks like a software project with a standard app layout (config + source).");
-  } else {
-    parts.push("Here is what is at the repository root:");
-  }
-
-  if (items.length) {
-    parts.push("");
-    parts.push("**Root layout:**");
-    for (const i of items.slice(0, 30)) {
-      const name = i.name || (i.path ? i.path.split("/").pop() : "") || "";
-      if (!name) continue;
-      parts.push(`- ${name}${i.type === "dir" ? "/" : ""}`);
-    }
-  }
-
-  if (readmeText && readmeText.trim()) {
-    parts.push("");
-    parts.push("**From the README / docs:**");
-    parts.push(readmeText.trim().slice(0, 1500) + (readmeText.trim().length > 1500 ? "…" : ""));
-  } else {
-    parts.push("");
-    parts.push("There is no README at the root. Ask me to open something specific (e.g. `replit.md`, `package.json`, or a file under `artifacts/`) for more detail.");
-  }
-
-  parts.push("");
-  parts.push("I used your connected GitHub access for this — not a generic refusal. Ask about any file or folder next.");
-  return parts.join("\n");
+  return reply;
 }
 
 function wantsGithubDescribe(text: string): boolean {
   const t = text.trim();
-  if (/\b(describe|summary|summarize|overview|explain)\b/i.test(t) && /\b(repo|repository|app|project|codebase|connected|axis)\b/i.test(t)) {
+  const subject = /\b(repo|repository|app|project|this|it|axis|codebase)\b/i;
+  if (/\b(describe|summary|summarize|overview|explain)\b/i.test(t) && subject.test(t)) {
     return true;
   }
-  if (/\b(what is|what\'s|whats|tell me about)\b/i.test(t) && /\b(repo|repository|app|project|this|it|axis)\b/i.test(t)) {
+  // Catches "what is X" as well as "what X is" (e.g. "what the app is"), not just the exact "what is" substring.
+  if (/\bwhat\b[\s\S]*\bis\b/i.test(t) && subject.test(t)) {
     return true;
   }
+  if (/\btell me about\b/i.test(t) && subject.test(t)) return true;
   if (/^describe\b/i.test(t) && t.length < 80) return true;
+  if (/\bsearch\b[\s\S]*\bfiles\b/i.test(t)) return true;
   return false;
 }
 
@@ -179,6 +129,11 @@ function looksLikeWeakRepoAnswer(text: string): boolean {
     if (/don'?t have (access|the capability)/.test(t)) return true;
     if (/web browser/.test(t)) return true;
     if (/github repository of/.test(t)) return true;
+  }
+  // Generic, ungrounded product-blurb phrasing the model reaches for when it has no real file data —
+  // a giveaway that it's guessing rather than describing anything it actually looked at.
+  if (/\b(is a (web-based|cloud-based) tool|is a platform that|is designed to (help|allow)|allows users to (create|edit|share|manage))\b/.test(t)) {
+    return true;
   }
   return false;
 }
@@ -348,12 +303,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
       }
     }
 
-    const describeIntent = wantsGithubDescribe(content);
-    const wantsGithubTool =
-      describeIntent ||
-      /\b(github|my repo|the repo|repository|pull request|\bPR\b|commit to|list files|read file|write file|pull from|clone|what is this repo|tell me what it is|connected repo|connected repository)\b/i.test(content) ||
-      /\bdescribe\b/i.test(content) ||
-      /\b[\w.-]+\/[\w.-]+\b/.test(content);
+    const parsedRepoInText = parseOwnerRepo(content);
+    // Don't gate on how the question is phrased — if GitHub is connected (or a specific
+    // owner/repo was named), ground every non-greeting reply in real data and let the
+    // model itself decide whether/how to use it, rather than requiring keyword matches.
+    const wantsGithubTool = !greeting && (!!parsedRepoInText || (!!userId && (await isGithubReady(userId))));
     const wantsWebSearch = /\b(search the web|look up online|current price|latest news|weather today)\b/i.test(content);
 
     if (wantsWebSearch) {
@@ -437,15 +391,12 @@ router.post("/conversations/:id/messages", async (req, res) => {
         if (!read.error && typeof read.output === "string") readmeText = read.output;
       }
 
-      reply = describeIntent
-        ? formatGithubDescribeAnswer(hint, items, readmeText, listed.error ?? null)
-        : formatGithubPullAnswer(hint, items, readmeText, listed.error ?? null);
-      if (isToolLeak(reply)) {
-        reply = describeIntent
-          ? formatGithubDescribeAnswer(hint, items, readmeText, listed.error ?? "Unknown error")
-          : formatGithubPullAnswer(hint, items, readmeText, listed.error ?? "Unknown error");
-      }
-      await streamText(res, reply);
+      reply = await streamGithubGroundedAnswer(res, workingMessages, hint, items, readmeText, listed.error ?? null, {
+        fast: short || greeting,
+        maxNewTokens: greeting ? 60 : short ? 250 : 900,
+        maxMessages: greeting ? 2 : short ? 3 : 6,
+        maxCharsPerMessage: greeting ? 300 : short ? 600 : 1400,
+      });
     } else {
       let streamed = "";
       reply = await localGenerateStreaming(workingMessages, {
@@ -494,8 +445,12 @@ router.post("/conversations/:id/messages", async (req, res) => {
           const read = await executeGithubTool(userId, "github_read_file", { path: doc2.path });
           if (!read.error && typeof read.output === "string") readme2 = read.output;
         }
-        reply = formatGithubDescribeAnswer("your connected repo", items2, readme2, listed2.error ?? null);
-        await streamText(res, reply);
+        reply = await streamGithubGroundedAnswer(res, workingMessages, "your connected repo", items2, readme2, listed2.error ?? null, {
+          fast: false,
+          maxNewTokens: 500,
+          maxMessages: 6,
+          maxCharsPerMessage: 1400,
+        });
       }
     }
 
