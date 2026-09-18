@@ -1,6 +1,6 @@
 /**
  * Load workspace packages for Forge preview.
- * axis-preview: marker in DB + serve real files from disk (instant Run).
+ * axis-preview: prefer Vite dist, else forge-static (instant, no build).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, dirname, resolve } from "path";
@@ -182,7 +182,13 @@ function walkFiles(dir: string): string[] {
 }
 
 function findDistDir(pkgDir: string): string | null {
-  for (const candidate of [join(pkgDir, "dist", "public"), join(pkgDir, "dist"), join(pkgDir, "build")]) {
+  // Prefer production Vite output, then instant forge-static
+  for (const candidate of [
+    join(pkgDir, "dist", "public"),
+    join(pkgDir, "dist"),
+    join(pkgDir, "forge-static"),
+    join(pkgDir, "build"),
+  ]) {
     if (existsSync(join(candidate, "index.html"))) return candidate;
   }
   return null;
@@ -192,9 +198,12 @@ function distLooksBuilt(distDir: string): boolean {
   try {
     const html = readFileSync(join(distDir, "index.html"), "utf8");
     if (/\/src\/main\.(tsx|jsx|ts|js)/i.test(html)) return false;
+    // forge-static is a complete static page
+    if (/forge-static/i.test(distDir) && /<html/i.test(html)) return true;
     if (/assets\//i.test(html) && /\.js/i.test(html)) return true;
     if (/type=["']module["']/i.test(html) && !/src\/main/i.test(html)) return true;
-    return false;
+    if (/<h1[^>]*>\s*Axis/i.test(html)) return true;
+    return /<!DOCTYPE html>/i.test(html) && html.length > 200;
   } catch {
     return false;
   }
@@ -221,19 +230,14 @@ async function loadDistIntoApp(
 ): Promise<{ files: number; paths: string[]; indexPreview: string }> {
   await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
-  // axis-preview: tiny DB marker; preview.ts serves real files from disk (fast Run)
   if (/axis-preview/i.test(distDir)) {
     const marker =
       `<!DOCTYPE html><!-- forge-disk:axis-preview -->` +
       `<html><head><meta charset="UTF-8"/><base href="${basePath}">` +
-      `<meta name="viewport" content="width=device-width, initial-scale=1"/>` +
-      `<title>Axis</title></head><body>` +
-      `<p style="font-family:system-ui;padding:1rem;color:#64748b">Opening Axis…</p>` +
-      `</body></html>`;
+      `<title>Axis</title></head><body><p>Opening Axis…</p></body></html>`;
     await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: marker });
-    const assetCount = walkFiles(distDir).length;
     return {
-      files: assetCount,
+      files: walkFiles(distDir).length || 1,
       paths: ["index.html", "(disk)"],
       indexPreview: marker.slice(0, 200),
     };
@@ -371,14 +375,12 @@ export async function buildWorkspacePackage(
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error:
-        `No built dist at ${target.dir}/dist (or dist/public). In shell:\n` +
-        `  cd ${target.relativeDir} && pnpm run build\n` +
-        `Then pull again.`,
+      error: `No preview files under ${target.relativeDir} (need forge-static or dist). git pull and restart.`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
 
+  // forceCompile still tries vite briefly
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: process.env.PORT || "5000",
@@ -407,15 +409,17 @@ export async function buildWorkspacePackage(
   }
 
   if (build.code !== 0) {
-    const errTail = (build.stderr || build.stdout || "").slice(-1200);
+    // Fall back to forge-static if present
+    const staticDir = join(target.dir, "forge-static");
+    if (existsSync(join(staticDir, "index.html"))) {
+      const hit = await tryLoad(staticDir, true);
+      if (hit) return hit;
+    }
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error:
-        build.code === 124
-          ? `Vite timed out. Shell-build ${target.relativeDir}, then pull.`
-          : `Build failed (${build.ms}ms): ${errTail || "non-zero exit"}`,
+      error: `Vite build failed; no forge-static either.`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
@@ -426,7 +430,7 @@ export async function buildWorkspacePackage(
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error: `Build exited 0 but no dist under ${target.relativeDir}.`,
+      error: `No dist after build for ${target.relativeDir}.`,
     };
   }
 
@@ -437,7 +441,7 @@ export async function buildWorkspacePackage(
     ok: false,
     buildMs: Date.now() - started,
     root,
-    error: `Dist at ${distDir} could not be loaded.`,
+    error: `Could not load ${distDir}.`,
   };
 }
 
