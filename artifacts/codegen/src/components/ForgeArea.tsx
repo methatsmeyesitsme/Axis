@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   useGetForgeConversation,
   useCreateForgeConversation,
@@ -503,8 +504,8 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
 
       {composer("Describe the app you want to build...")}
 
-      {showPreview && previewUrl && (
-        <div className="fixed inset-0 z-[100] bg-background flex flex-col">
+      {showPreview && previewUrl && createPortal(
+        <div className="fixed inset-0 z-[100] bg-background flex flex-col overflow-hidden" style={{ touchAction: "pan-y" }}>
           <div className="h-12 shrink-0 flex items-center justify-between px-3 border-b bg-card">
             <button
               type="button"
@@ -529,10 +530,12 @@ export default function ForgeArea({ conversationId, onConversationCreated, onOpe
           <iframe
             src={previewUrl}
             title="App preview"
-            className="flex-1 w-full border-0 bg-white"
+            className="flex-1 border-0 bg-white"
+            style={{ width: "100%", maxWidth: "100%" }}
             sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
           />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
