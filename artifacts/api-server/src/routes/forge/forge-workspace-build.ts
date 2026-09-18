@@ -1,9 +1,11 @@
 /**
- * Build a Vite/React package from the local Axis monorepo (where Forge runs)
- * and load the dist output into forgeAppFiles for static preview.
+ * Build a Vite/React package from the local Axis monorepo and load dist into
+ * forgeAppFiles for static preview.
  *
- * Speed: prefer an already-built dist (rewrite asset base for this app id)
- * instead of running a full Vite build every pull/preview.
+ * Speed strategy:
+ * 1. Reuse existing dist (rewrite base) — near-instant
+ * 2. One fast vite build (FORGE_FAST_BUILD, no minify, 45s timeout)
+ * 3. Never chain three 180s builds (that felt like "minutes / never finishes")
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, dirname } from "path";
@@ -15,6 +17,10 @@ import { eq } from "drizzle-orm";
 const TEXT_EXTS = new Set([
   "html", "htm", "css", "js", "mjs", "cjs", "json", "svg", "txt", "map", "xml",
 ]);
+
+/** In-process cache: package dir → last successful dist path */
+const distCache = new Map<string, { distDir: string; at: number }>();
+const DIST_CACHE_MS = 10 * 60 * 1000;
 
 function findMonorepoRoot(): string | null {
   const candidates: string[] = [];
@@ -129,14 +135,14 @@ function runCommand(
         /* ignore */
       }
       resolve({ code: 124, stdout, stderr: stderr + "\n[timeout]", ms: Date.now() - started });
-    }, opts.timeoutMs ?? 180_000);
+    }, opts.timeoutMs ?? 45_000);
     child.stdout?.on("data", (d) => {
       stdout += String(d);
-      if (stdout.length > 200_000) stdout = stdout.slice(-100_000);
+      if (stdout.length > 100_000) stdout = stdout.slice(-50_000);
     });
     child.stderr?.on("data", (d) => {
       stderr += String(d);
-      if (stderr.length > 200_000) stderr = stderr.slice(-100_000);
+      if (stderr.length > 100_000) stderr = stderr.slice(-50_000);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -174,29 +180,29 @@ function findDistDir(pkgDir: string): string | null {
   for (const candidate of [join(pkgDir, "dist", "public"), join(pkgDir, "dist"), join(pkgDir, "build")]) {
     if (existsSync(join(candidate, "index.html"))) return candidate;
   }
-  for (const candidate of [join(pkgDir, "dist", "public"), join(pkgDir, "dist")]) {
-    if (existsSync(candidate)) return candidate;
-  }
   return null;
 }
 
-/** True if dist index looks like a real Vite production build (not /src/main.tsx shell). */
 function distLooksBuilt(distDir: string): boolean {
   try {
     const html = readFileSync(join(distDir, "index.html"), "utf8");
     if (/\/src\/main\.(tsx|jsx|ts|js)/i.test(html)) return false;
-    return /\/assets\//i.test(html) || /type=["']module["']/i.test(html);
+    // Has hashed assets or at least a module script that is not source
+    if (/assets\//i.test(html) && /\.js/i.test(html)) return true;
+    if (/type=["']module["']/i.test(html) && !/src\/main/i.test(html)) return true;
+    return false;
   } catch {
     return false;
   }
 }
 
-/** Point absolute preview bases at this app's preview URL. */
+/** Relative base so one dist works for every forge app id without rebuild. */
 function rewritePreviewBase(content: string, path: string, basePath: string): string {
   let out = content;
-  // Any previous forge preview base → this app
   out = out.replace(/\/api\/forge\/preview\/\d+\//g, basePath);
+  // Absolute /assets → relative under base
   if (path === "index.html" || path.endsWith(".html")) {
+    out = out.replace(/(href|src)=(["'])\/assets\//g, `$1=$2${basePath}assets/`);
     if (/<base\s/i.test(out)) {
       out = out.replace(/<base\s+[^>]*>/i, `<base href="${basePath}">`);
     } else if (/<head[^>]*>/i.test(out)) {
@@ -214,10 +220,9 @@ async function loadDistIntoApp(
   await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
   const all = walkFiles(distDir);
-  let files = 0;
-  const paths: string[] = [];
-  let indexPreview = "";
   const rows: { appId: number; path: string; content: string }[] = [];
+  let indexPreview = "";
+  const paths: string[] = [];
 
   for (const full of all) {
     const rel = relative(distDir, full).replace(/\\/g, "/");
@@ -233,18 +238,16 @@ async function loadDistIntoApp(
     if (content.length > 1_500_000) continue;
     content = rewritePreviewBase(content, rel, basePath);
     rows.push({ appId, path: rel, content });
-    files++;
     paths.push(rel);
     if (rel === "index.html") indexPreview = content.slice(0, 400);
   }
 
-  // Batch insert in chunks for speed
-  const chunk = 25;
+  const chunk = 40;
   for (let i = 0; i < rows.length; i += chunk) {
     await db.insert(forgeAppFiles).values(rows.slice(i, i + chunk));
   }
 
-  return { files, paths: paths.slice(0, 40), indexPreview };
+  return { files: rows.length, paths: paths.slice(0, 40), indexPreview };
 }
 
 export type BuildResult =
@@ -273,7 +276,7 @@ export async function buildWorkspacePackage(
       root: null,
       error:
         "Could not find the Axis monorepo on disk (no pnpm-workspace.yaml near the server). " +
-        `cwd=${process.cwd()}. Forge builds only work when the API server runs inside the Axis Repl.`,
+        `cwd=${process.cwd()}.`,
     };
   }
 
@@ -310,11 +313,30 @@ export async function buildWorkspacePackage(
 
   const basePath = `/api/forge/preview/${appId}/`;
 
-  // Fast path: reuse existing production dist (ButtonPresser-speed after first build)
+  // 1) Memory cache
+  const cached = distCache.get(target.dir);
+  if (cached && Date.now() - cached.at < DIST_CACHE_MS && distLooksBuilt(cached.distDir)) {
+    const loaded = await loadDistIntoApp(appId, cached.distDir, basePath);
+    if (loaded.files > 0) {
+      return {
+        ok: true,
+        package: target.relativeDir,
+        distDir: cached.distDir,
+        files: loaded.files,
+        paths: loaded.paths,
+        buildMs: Date.now() - started,
+        indexLooksBuilt: true,
+        reusedDist: true,
+      };
+    }
+  }
+
+  // 2) Disk dist already present
   const existingDist = findDistDir(target.dir);
   if (existingDist && distLooksBuilt(existingDist)) {
+    distCache.set(target.dir, { distDir: existingDist, at: Date.now() });
     const loaded = await loadDistIntoApp(appId, existingDist, basePath);
-    if (loaded.files > 0 && loaded.indexPreview) {
+    if (loaded.files > 0) {
       return {
         ok: true,
         package: target.relativeDir,
@@ -328,58 +350,66 @@ export async function buildWorkspacePackage(
     }
   }
 
+  // 3) One fast Vite build only (relative base → reusable)
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: process.env.PORT || "5000",
-    BASE_PATH: basePath,
+    BASE_PATH: "./",
     NODE_ENV: "production",
+    FORGE_FAST_BUILD: "1",
   };
 
-  // Prefer local vite in the package dir (faster than workspace filter resolve)
-  let build = await runCommand(
-    "pnpm",
-    ["exec", "vite", "build", "--config", "vite.config.ts", "--logLevel", "error"],
-    { cwd: target.dir, env, timeoutMs: 180_000 },
-  );
+  // Prefer node_modules/.bin/vite if present (avoids slow pnpm resolve)
+  const viteBin = join(target.dir, "node_modules", ".bin", "vite");
+  const rootViteBin = join(root, "node_modules", ".bin", "vite");
+  let build: { code: number; stdout: string; stderr: string; ms: number };
 
-  if (build.code !== 0) {
-    build = await runCommand("pnpm", ["run", "build"], {
+  if (existsSync(viteBin)) {
+    build = await runCommand(viteBin, ["build", "--config", "vite.config.ts", "--logLevel", "error"], {
       cwd: target.dir,
       env,
-      timeoutMs: 180_000,
+      timeoutMs: 45_000,
     });
-  }
-
-  if (build.code !== 0) {
-    build = await runCommand("pnpm", ["--filter", target.name, "run", "build"], {
-      cwd: root,
+  } else if (existsSync(rootViteBin)) {
+    build = await runCommand(rootViteBin, ["build", "--config", "vite.config.ts", "--logLevel", "error"], {
+      cwd: target.dir,
       env,
-      timeoutMs: 180_000,
+      timeoutMs: 45_000,
     });
+  } else {
+    build = await runCommand(
+      "pnpm",
+      ["exec", "vite", "build", "--config", "vite.config.ts", "--logLevel", "error"],
+      { cwd: target.dir, env, timeoutMs: 45_000 },
+    );
   }
 
   if (build.code !== 0) {
-    const errTail = (build.stderr || build.stdout || "").slice(-2000);
+    const errTail = (build.stderr || build.stdout || "").slice(-1500);
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error: `Build failed for ${target.relativeDir} (${build.ms}ms). ${errTail || "pnpm/vite exited non-zero"}`,
+      error:
+        build.code === 124
+          ? `Build timed out after ${build.ms}ms for ${target.relativeDir}. Run once in the shell: cd ${target.relativeDir} && pnpm run build — then pull again to reuse dist.`
+          : `Build failed for ${target.relativeDir} (${build.ms}ms). ${errTail || "vite exited non-zero"}`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
 
   const distDir = findDistDir(target.dir);
-  if (!distDir) {
+  if (!distDir || !distLooksBuilt(distDir)) {
     return {
       ok: false,
       buildMs: Date.now() - started,
       root,
-      error: `Build reported success (${build.ms}ms) but no dist/index.html under ${target.relativeDir}.`,
+      error: `Build finished (${build.ms}ms) but dist is missing or still a source shell under ${target.relativeDir}.`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
 
+  distCache.set(target.dir, { distDir, at: Date.now() });
   const loaded = await loadDistIntoApp(appId, distDir, basePath);
   if (loaded.files === 0) {
     return {
@@ -390,21 +420,6 @@ export async function buildWorkspacePackage(
     };
   }
 
-  const indexLooksBuilt =
-    !!loaded.indexPreview &&
-    !/\/src\/main\.(tsx|jsx|ts|js)/i.test(loaded.indexPreview) &&
-    (/\/assets\//i.test(loaded.indexPreview) || /type=["']module["']/i.test(loaded.indexPreview));
-
-  if (!indexLooksBuilt && /\/src\/main\.(tsx|jsx)/i.test(loaded.indexPreview)) {
-    return {
-      ok: false,
-      buildMs: Date.now() - started,
-      root,
-      error:
-        `Loaded ${loaded.files} files from ${distDir}, but index.html still points at /src/main.tsx — not a production build.`,
-    };
-  }
-
   return {
     ok: true,
     package: target.relativeDir,
@@ -412,7 +427,7 @@ export async function buildWorkspacePackage(
     files: loaded.files,
     paths: loaded.paths,
     buildMs: Date.now() - started,
-    indexLooksBuilt,
+    indexLooksBuilt: true,
     reusedDist: false,
   };
 }
