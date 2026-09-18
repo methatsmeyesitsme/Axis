@@ -1,6 +1,6 @@
 /**
- * Load a Vite/React package into forgeAppFiles for static preview.
- * Default = reuse local dist only (seconds). Never hang on Vite in chat.
+ * Load workspace packages for Forge preview.
+ * axis-preview: marker in DB + serve real files from disk (instant Run).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, dirname, resolve } from "path";
@@ -38,13 +38,7 @@ function findMonorepoRoot(): string | null {
     add(process.env[envKey]);
     if (process.env[envKey]) add(join(process.env[envKey]!, "workspace"));
   }
-  for (const p of [
-    "/home/runner/workspace",
-    "/home/runner",
-    "/home/user/workspace",
-    "/workspace",
-    "/app",
-  ]) {
+  for (const p of ["/home/runner/workspace", "/home/runner", "/home/user/workspace", "/workspace", "/app"]) {
     add(p);
   }
 
@@ -227,6 +221,24 @@ async function loadDistIntoApp(
 ): Promise<{ files: number; paths: string[]; indexPreview: string }> {
   await db.delete(forgeAppFiles).where(eq(forgeAppFiles.appId, appId));
 
+  // axis-preview: tiny DB marker; preview.ts serves real files from disk (fast Run)
+  if (/axis-preview/i.test(distDir)) {
+    const marker =
+      `<!DOCTYPE html><!-- forge-disk:axis-preview -->` +
+      `<html><head><meta charset="UTF-8"/><base href="${basePath}">` +
+      `<meta name="viewport" content="width=device-width, initial-scale=1"/>` +
+      `<title>Axis</title></head><body>` +
+      `<p style="font-family:system-ui;padding:1rem;color:#64748b">Opening Axis…</p>` +
+      `</body></html>`;
+    await db.insert(forgeAppFiles).values({ appId, path: "index.html", content: marker });
+    const assetCount = walkFiles(distDir).length;
+    return {
+      files: assetCount,
+      paths: ["index.html", "(disk)"],
+      indexPreview: marker.slice(0, 200),
+    };
+  }
+
   const all = walkFiles(distDir);
   const rows: { appId: number; path: string; content: string }[] = [];
   let indexPreview = "";
@@ -362,7 +374,7 @@ export async function buildWorkspacePackage(
       error:
         `No built dist at ${target.dir}/dist (or dist/public). In shell:\n` +
         `  cd ${target.relativeDir} && pnpm run build\n` +
-        `Then pull again (loads in a few seconds).`,
+        `Then pull again.`,
       packages: packages.map((p) => p.relativeDir),
     };
   }
@@ -402,7 +414,7 @@ export async function buildWorkspacePackage(
       root,
       error:
         build.code === 124
-          ? `Vite timed out for ${target.relativeDir}. Use shell build, then pull.`
+          ? `Vite timed out. Shell-build ${target.relativeDir}, then pull.`
           : `Build failed (${build.ms}ms): ${errTail || "non-zero exit"}`,
       packages: packages.map((p) => p.relativeDir),
     };
